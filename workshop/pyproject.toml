@@ -1,0 +1,28 @@
+[project]
+name = "taller-cultura"
+version = "0.1.0"
+description = "Taller de diagnóstico de cultura organizacional: ETL de Excel a SQLite y cálculo de resumen, en arquitectura hexagonal."
+requires-python = ">=3.10"
+dependencies = [
+    "pandas>=2.0",
+    "openpyxl>=3.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+
+[project.scripts]
+taller-cultura = "taller_cultura.main:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
