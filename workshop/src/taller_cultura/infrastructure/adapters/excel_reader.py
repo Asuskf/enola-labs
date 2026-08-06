@@ -5,22 +5,28 @@ conoce la disposición física, irregular, del archivo `.xlsx` original
 (hojas `CALIFICADORES` y `TALLER`). Si el formato de origen cambia, solo
 este archivo debería tocarse.
 
-Estructura descubierta en la hoja TALLER (fila/columna en notación Excel,
-1-indexado):
+Estructura real de la hoja TALLER (notación Excel, 1-indexado):
+
 - Columnas C/D, E/F, G/H, I/J, K/L son pares (PASADO, ACTUAL) para los
   5 tipos de cultura, en ese orden fijo: LOGRO, CENTRADA EN EL CLIENTE,
   EQUIPO UNICO, INNOVADORA, LAS PERSONAS PRIMERO.
-- Cada "bloque de ítem" empieza en una fila cuya columna B contiene una
-  de las etiquetas de categoría/ítem ("TIPO DE CULTURA", "Otras
-  palabras", "Una definición", "Comportamientos", "Símbolos", "Sistemas").
-  Las columnas C, E, G, I, K de esa fila traen el texto del ítem para
-  cada tipo de cultura (excepto la fila "TIPO DE CULTURA", que solo
-  encabeza la sección y no es un ítem calificable).
-- Debajo de cada fila de ítem hay N filas de respuesta: columna B trae
-  la posición del calificador (1..12) o la etiqueta "CONSENSO"; las
-  columnas C..L (pares PASADO/ACTUAL) traen el símbolo A/R/V si fue
-  calificado. El bloque termina cuando la columna B deja de ser un
-  número de posición o "CONSENSO".
+
+- La hoja es una secuencia de "bloques". Cada bloque es:
+      fila de ÍTEM      -> el texto de la frase evaluada, en C/E/G/I/K
+      filas de RESPUESTA-> una por calificador (columna B = 1..12) y,
+                           al final, la fila CONSENSO
+      filas derivadas   -> eco del consenso (VLOOKUP), proporciones
+                           R/A/V y VALORACIÓN; todas calculadas por
+                           fórmulas, NO son respuestas
+
+- La categoría (Tipo de cultura / Comportamientos / Símbolos / Sistemas)
+  aparece como etiqueta en la columna B, pero **solo en el primer ítem de
+  cada categoría**; los ítems siguientes la tienen vacía y la heredan.
+
+Por eso los bloques NO se detectan por la etiqueta de la columna B (eso
+perdía todos los ítems sin etiqueta), sino por las **rachas de filas de
+respuesta**, que sí están siempre presentes en la plantilla: la fila de
+ítem es la que está justo encima de cada racha.
 """
 
 from __future__ import annotations
@@ -60,15 +66,21 @@ COLUMNAS_TIPO_CULTURA: dict[TipoCultura, tuple[int, int]] = {
 }
 COLUMNA_ETIQUETA_ITEM = 2  # columna B
 
-# Etiquetas normalizadas (minúsculas, sin acentos) que marcan el inicio de un bloque.
-ETIQUETA_A_CATEGORIA: dict[str, CategoriaAspecto | None] = {
-    "tipo de cultura": None,  # encabezado de sección, no es un ítem calificable
+# Etiquetas normalizadas (minúsculas, sin acentos) que fijan la categoría vigente.
+ETIQUETA_A_CATEGORIA: dict[str, CategoriaAspecto] = {
+    "tipo de cultura": CategoriaAspecto.TIPO_DE_CULTURA,
     "otras palabras": CategoriaAspecto.TIPO_DE_CULTURA,
     "una definicion": CategoriaAspecto.TIPO_DE_CULTURA,
     "comportamientos": CategoriaAspecto.COMPORTAMIENTOS,
     "simbolos": CategoriaAspecto.SIMBOLOS,
     "sistemas": CategoriaAspecto.SISTEMAS,
 }
+
+# Una racha de respuestas legítima tiene 7..13 filas. Este mínimo descarta
+# los números sueltos de las filas de encabezado (fila 2 "CONSENSO", fila 4
+# con los índices de columna 2/3/4/...), que si no se leerían como si
+# fueran el inicio de un bloque.
+MIN_FILAS_POR_RACHA = 3
 
 
 def _normalizar(texto: str) -> str:
@@ -80,15 +92,27 @@ def _es_valoracion_valida(texto: object) -> bool:
     return isinstance(texto, str) and texto.strip().upper() in {"A", "R", "V"}
 
 
+def _es_error_de_excel(valor: object) -> bool:
+    """`#ERROR!`, `#N/A`, `#REF!`: fórmulas rotas de la plantilla original.
+
+    Aparecen intercaladas entre las filas de calificadores, así que hay que
+    saltarlas sin dar por terminada la racha (si no, se pierde la fila
+    CONSENSO que viene después).
+    """
+    return isinstance(valor, str) and valor.strip().startswith("#")
+
+
 @dataclass
 class _BloqueItem:
-    """Un ítem calificable ya localizado en la hoja: su fila y, para cada
-    tipo de cultura presente, el Aspecto de dominio junto con el id
-    temporal (posición en la lista plana) que lo identifica antes de que
-    el repositorio le asigne un id real.
+    """Un ítem calificable ya localizado en la hoja: la fila del texto, el
+    rango de filas de respuesta y, para cada tipo de cultura presente, el
+    Aspecto de dominio junto con el id temporal (posición en la lista
+    plana) que lo identifica antes de que el repositorio le asigne un id.
     """
 
     fila_item: int
+    fila_inicio_respuestas: int
+    fila_fin_respuestas: int
     aspectos_por_cultura: dict[TipoCultura, tuple[int, Aspecto]]
 
 
@@ -137,18 +161,16 @@ class LectorTallerExcel(LectorTaller):
         return aspectos
 
     def leer_calificaciones(self, aspectos: list[Aspecto]) -> list[Calificacion]:
-        """Recorre los bloques ya localizados extrayendo sus filas de
-        respuesta. El id temporal de cada calificación coincide con la
-        posición del aspecto correspondiente en la lista que devuelve
-        `leer_aspectos` (misma numeración), que la capa de aplicación
-        luego remapea al id real asignado por el repositorio.
+        """El id temporal de cada calificación coincide con la posición del
+        aspecto correspondiente en la lista que devuelve `leer_aspectos`,
+        que la capa de aplicación remapea luego al id real del repositorio.
         """
         calificaciones: list[Calificacion] = []
         for bloque in self._obtener_bloques():
             calificaciones.extend(self._leer_respuestas_del_bloque(bloque))
         return calificaciones
 
-    # -- helpers privados -------------------------------------------------
+    # -- localización de bloques -------------------------------------------
 
     def _obtener_bloques(self) -> list[_BloqueItem]:
         if self._bloques is None:
@@ -156,57 +178,120 @@ class LectorTallerExcel(LectorTaller):
         return self._bloques
 
     def _localizar_bloques(self):
-        """Recorre la hoja TALLER una sola vez, ubicando cada bloque de
-        ítem y asignando a cada (bloque, tipo_cultura) el id temporal
-        secuencial que tendrá en la lista plana de aspectos.
-        """
         hoja = self._workbook[HOJA_TALLER]
+        max_row = hoja.max_row
+
+        categoria_por_fila = self._mapear_categoria_vigente(hoja, max_row)
         orden_por_categoria: dict[CategoriaAspecto, int] = {}
         id_temporal = 0
 
-        for fila in range(1, hoja.max_row + 1):
-            etiqueta = hoja.cell(fila, COLUMNA_ETIQUETA_ITEM).value
-            if not isinstance(etiqueta, str):
+        for inicio, fin in self._localizar_rachas_de_respuesta(hoja, max_row):
+            fila_item = inicio - 1
+            if fila_item < 1:
                 continue
-            clave = _normalizar(etiqueta)
-            if clave not in ETIQUETA_A_CATEGORIA:
+            categoria = categoria_por_fila.get(fila_item)
+            if categoria is None:
                 continue
 
-            categoria = ETIQUETA_A_CATEGORIA[clave]
-            if categoria is None:
-                continue  # fila "TIPO DE CULTURA": encabezado, no es ítem
+            textos: dict[TipoCultura, str] = {}
+            for tipo_cultura, (col_pasado, _col_actual) in COLUMNAS_TIPO_CULTURA.items():
+                texto = hoja.cell(fila_item, col_pasado).value
+                if isinstance(texto, str) and texto.strip():
+                    textos[tipo_cultura] = texto.strip()
+            if not textos:
+                continue
 
             orden = orden_por_categoria.get(categoria, 0) + 1
             orden_por_categoria[categoria] = orden
 
             aspectos_por_cultura: dict[TipoCultura, tuple[int, Aspecto]] = {}
-            for tipo_cultura, (col_pasado, _col_actual) in COLUMNAS_TIPO_CULTURA.items():
-                texto = hoja.cell(fila, col_pasado).value
-                if not isinstance(texto, str) or not texto.strip():
-                    continue
-                aspecto = Aspecto(
-                    id=None,
-                    tipo_cultura=tipo_cultura,
-                    categoria=categoria,
-                    orden=orden,
-                    texto=texto.strip(),
+            for tipo_cultura, texto in textos.items():
+                aspectos_por_cultura[tipo_cultura] = (
+                    id_temporal,
+                    Aspecto(
+                        id=None,
+                        tipo_cultura=tipo_cultura,
+                        categoria=categoria,
+                        orden=orden,
+                        texto=texto,
+                    ),
                 )
-                aspectos_por_cultura[tipo_cultura] = (id_temporal, aspecto)
                 id_temporal += 1
 
-            if aspectos_por_cultura:
-                yield _BloqueItem(fila_item=fila, aspectos_por_cultura=aspectos_por_cultura)
+            yield _BloqueItem(
+                fila_item=fila_item,
+                fila_inicio_respuestas=inicio,
+                fila_fin_respuestas=fin,
+                aspectos_por_cultura=aspectos_por_cultura,
+            )
+
+    @staticmethod
+    def _mapear_categoria_vigente(hoja, max_row: int) -> dict[int, CategoriaAspecto | None]:
+        """Para cada fila, qué categoría está vigente en ese punto de la hoja.
+
+        La etiqueta solo aparece en el primer ítem de cada categoría; las
+        filas siguientes la heredan hasta que aparezca la siguiente.
+        """
+        categoria_por_fila: dict[int, CategoriaAspecto | None] = {}
+        categoria_actual: CategoriaAspecto | None = None
+        for fila in range(1, max_row + 1):
+            etiqueta = hoja.cell(fila, COLUMNA_ETIQUETA_ITEM).value
+            if isinstance(etiqueta, str):
+                clave = _normalizar(etiqueta)
+                if clave in ETIQUETA_A_CATEGORIA:
+                    categoria_actual = ETIQUETA_A_CATEGORIA[clave]
+            categoria_por_fila[fila] = categoria_actual
+        return categoria_por_fila
+
+    def _localizar_rachas_de_respuesta(self, hoja, max_row: int) -> list[tuple[int, int]]:
+        """Devuelve los rangos [inicio, fin] de filas de respuesta.
+
+        Una racha son filas consecutivas cuya columna B identifica a un
+        calificador (código 1..12) o a la fila CONSENSO. Las fórmulas rotas
+        (`#ERROR!`) intercaladas se saltan sin cortar la racha. La racha
+        termina en la primera fila que no es ninguna de las dos cosas —
+        típicamente la fila de eco del consenso, que es un VLOOKUP y por lo
+        tanto NO debe contarse como una respuesta más.
+        """
+        rachas: list[tuple[int, int]] = []
+        fila = 1
+        while fila <= max_row:
+            if self._codigo_calificador_de_fila(hoja.cell(fila, COLUMNA_ETIQUETA_ITEM).value) is None:
+                fila += 1
+                continue
+
+            inicio = fila
+            fin = fila
+            filas_de_respuesta = 0
+            cursor = fila
+            while cursor <= max_row:
+                valor_b = hoja.cell(cursor, COLUMNA_ETIQUETA_ITEM).value
+                if self._codigo_calificador_de_fila(valor_b) is not None:
+                    fin = cursor
+                    filas_de_respuesta += 1
+                    cursor += 1
+                elif _es_error_de_excel(valor_b):
+                    cursor += 1
+                else:
+                    break
+
+            if filas_de_respuesta >= MIN_FILAS_POR_RACHA:
+                rachas.append((inicio, fin))
+            fila = cursor if cursor > fila else fila + 1
+        return rachas
+
+    # -- lectura de respuestas ---------------------------------------------
 
     def _leer_respuestas_del_bloque(self, bloque: _BloqueItem) -> list[Calificacion]:
         hoja = self._workbook[HOJA_TALLER]
         calificaciones: list[Calificacion] = []
 
-        fila = bloque.fila_item + 1
-        while fila <= hoja.max_row:
-            etiqueta_b = hoja.cell(fila, COLUMNA_ETIQUETA_ITEM).value
-            codigo_calificador = self._codigo_calificador_de_fila(etiqueta_b)
+        for fila in range(bloque.fila_inicio_respuestas, bloque.fila_fin_respuestas + 1):
+            codigo_calificador = self._codigo_calificador_de_fila(
+                hoja.cell(fila, COLUMNA_ETIQUETA_ITEM).value
+            )
             if codigo_calificador is None:
-                break
+                continue  # fila con fórmula rota intercalada
 
             for tipo_cultura, (id_temporal, _aspecto) in bloque.aspectos_por_cultura.items():
                 col_pasado, col_actual = COLUMNAS_TIPO_CULTURA[tipo_cultura]
@@ -226,7 +311,6 @@ class LectorTallerExcel(LectorTaller):
                             es_consenso=(codigo_calificador == CODIGO_CALIFICADOR_CONSENSO),
                         )
                     )
-            fila += 1
 
         return calificaciones
 
@@ -234,6 +318,8 @@ class LectorTallerExcel(LectorTaller):
     def _codigo_calificador_de_fila(etiqueta: object) -> int | None:
         if isinstance(etiqueta, str) and etiqueta.strip().upper() == NOMBRE_CALIFICADOR_CONSENSO:
             return CODIGO_CALIFICADOR_CONSENSO
+        if isinstance(etiqueta, bool):
+            return None
         if isinstance(etiqueta, (int, float)) and float(etiqueta).is_integer():
             return int(etiqueta)
         return None

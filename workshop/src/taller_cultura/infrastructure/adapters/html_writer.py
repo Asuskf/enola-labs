@@ -59,6 +59,37 @@ def _escapar(texto: str) -> str:
     )
 
 
+def _momentos_con_datos(resumen: ResumenTaller) -> tuple[Momento, ...]:
+    """Qué momentos (PASADO / ACTUAL) tienen realmente respuestas.
+
+    En un taller a medio llenar es normal que solo exista PASADO; el
+    reporte se adapta en vez de dibujar comparaciones vacías.
+    """
+    presentes = {r.momento for r in resumen.resumenes if r.total > 0}
+    return tuple(m for m in (Momento.PASADO, Momento.ACTUAL) if m in presentes)
+
+
+def _leyenda_momentos(momentos: tuple[Momento, ...]) -> str:
+    if len(momentos) == 2:
+        return "Se comparan el momento PASADO y el ACTUAL."
+    if len(momentos) == 1:
+        return f"Solo hay datos del momento {momentos[0].value}."
+    return "Todavía no hay datos."
+
+
+def _culturas_comparables(resumen: ResumenTaller) -> list[TipoCultura]:
+    """Culturas con datos en ambos momentos: las únicas donde la brecha
+    significa algo.
+    """
+    comparables = []
+    for tipo_cultura in TipoCultura:
+        pasado = resumen.para(tipo_cultura, Momento.PASADO)
+        actual = resumen.para(tipo_cultura, Momento.ACTUAL)
+        if pasado and actual and pasado.total > 0 and actual.total > 0:
+            comparables.append(tipo_cultura)
+    return comparables
+
+
 class ExportadorReporteHTML(ExportadorReporte):
     """Genera un reporte `.html` autocontenido con el resumen del taller."""
 
@@ -71,13 +102,15 @@ class ExportadorReporteHTML(ExportadorReporte):
     # -- ensamblado ---------------------------------------------------
 
     def _construir_html(self, reporte: ReporteTaller) -> str:
+        momentos = _momentos_con_datos(reporte.resumen)
         kpis = self._construir_kpis(reporte)
-        destacados = self._construir_destacados(reporte.resumen)
-        grafico_promedios = self._grafico_barras_agrupadas(reporte.resumen)
-        grafico_brecha = self._grafico_brecha(reporte.resumen)
+        destacados = self._construir_destacados(reporte.resumen, momentos)
+        grafico_promedios = self._grafico_barras_agrupadas(reporte.resumen, momentos)
+        seccion_brecha = self._seccion_brecha(reporte.resumen, momentos)
         grafico_distribucion = self._grafico_distribucion(reporte.resumen)
         tabla_resumen = self._tabla_resumen(reporte.resumen)
         tabla_detalle = self._tabla_detalle_categoria(reporte.detalle_categoria)
+        notas = self._construir_notas(reporte, momentos)
         generado_en = datetime.now().strftime("%Y-%m-%d %H:%M")
 
         return f"""<!doctype html>
@@ -94,7 +127,7 @@ class ExportadorReporteHTML(ExportadorReporte):
     <div>
       <h1>{_escapar(reporte.titulo)}</h1>
       <p class="subtitulo">Taller de diagnóstico de cultura organizacional</p>
-      <p class="marca-tiempo">Generado el {generado_en}</p>
+      <p class="marca-tiempo">Generado el {generado_en} · Base de cálculo: {_escapar(reporte.base_calculo)}</p>
     </div>
     <div class="acciones-encabezado">
       <button class="boton boton-pdf" id="boton-pdf" type="button">⬇ Descargar como PDF</button>
@@ -113,15 +146,11 @@ class ExportadorReporteHTML(ExportadorReporte):
 
   <section class="seccion">
     <h2>Promedio ponderado por tipo de cultura</h2>
-    <p class="ayuda">Escala 0 (bajo) a 2 (alto), comparando el momento PASADO contra el ACTUAL.</p>
+    <p class="ayuda">Escala 0 (bajo) a 2 (alto). {_escapar(_leyenda_momentos(momentos))}</p>
     {grafico_promedios}
   </section>
 
-  <section class="seccion">
-    <h2>Brecha ACTUAL − PASADO</h2>
-    <p class="ayuda">Diferencia del promedio ponderado. Azul = mejora, rojo = retrocede.</p>
-    {grafico_brecha}
-  </section>
+  {seccion_brecha}
 
   <section class="seccion">
     <h2>Distribución de valoraciones (Bajo / Medio / Alto)</h2>
@@ -140,6 +169,11 @@ class ExportadorReporteHTML(ExportadorReporte):
     {tabla_detalle}
   </section>
 
+  <section class="seccion">
+    <h2>Cómo leer este reporte</h2>
+    {notas}
+  </section>
+
   <footer class="pie">Generado automáticamente por el ETL del taller de cultura organizacional.</footer>
 </div>
 <script>{_JS}</script>
@@ -152,13 +186,15 @@ class ExportadorReporteHTML(ExportadorReporte):
     @staticmethod
     def _construir_kpis(reporte: ReporteTaller) -> str:
         total_respuestas = sum(r.total for r in reporte.resumen.resumenes)
-        culturas_con_datos = len({r.tipo_cultura for r in reporte.resumen.resumenes})
-        categorias_con_datos = len({d.categoria for d in reporte.detalle_categoria})
+        diagnostico = reporte.diagnostico
         tiles = [
-            ("Respuestas registradas", str(total_respuestas)),
+            ("Respuestas consideradas", str(total_respuestas)),
+            (
+                "Ítems calificados",
+                f"{diagnostico.aspectos_calificados} / {diagnostico.total_aspectos}",
+            ),
+            ("Cobertura del taller", f"{diagnostico.porcentaje_cobertura:.0f}%"),
             ("Calificadores participantes", str(reporte.calificadores_participantes)),
-            ("Tipos de cultura con datos", f"{culturas_con_datos} / {len(TipoCultura)}"),
-            ("Categorías evaluadas", f"{categorias_con_datos} / {len(CategoriaAspecto)}"),
         ]
         return "\n".join(
             f'<div class="kpi"><span class="kpi-valor">{valor}</span>'
@@ -166,102 +202,185 @@ class ExportadorReporteHTML(ExportadorReporte):
             for etiqueta, valor in tiles
         )
 
+    # -- notas metodológicas ------------------------------------------------
+
+    @staticmethod
+    def _construir_notas(reporte: ReporteTaller, momentos: tuple[Momento, ...]) -> str:
+        d = reporte.diagnostico
+        notas = [
+            f"<strong>Base de cálculo:</strong> {_escapar(reporte.base_calculo)}. "
+            "El consenso es la unidad de análisis del taller: una valoración acordada "
+            "por ítem, cultura y momento. Así es como agrega también el libro original.",
+            "<strong>Escala:</strong> cada valoración usa los símbolos R, A y V con pesos "
+            "0, 1 y 2 respectivamente, replicando la fórmula de la planilla "
+            "(<code>R=0, A=0,5, V=1</code>, aquí reescalada a 0–2). El promedio ponderado "
+            "va de 0 a 2.",
+            f"<strong>Cobertura:</strong> {d.aspectos_calificados} de {d.total_aspectos} ítems "
+            f"tienen al menos una valoración ({d.porcentaje_cobertura:.0f}%). "
+            f"Quedan {d.aspectos_sin_calificar} ítems sin calificar; las culturas o categorías "
+            "con pocas respuestas deben leerse con cautela.",
+            f"<strong>Respuestas en el archivo:</strong> {d.respuestas_consenso} de consenso y "
+            f"{d.respuestas_individuales} individuales.",
+        ]
+        if len(momentos) < 2:
+            faltante = "ACTUAL" if Momento.ACTUAL not in momentos else "PASADO"
+            notas.append(
+                f"<strong>Momento {faltante} pendiente:</strong> el taller aún no registra "
+                f"valoraciones de consenso para {faltante}, así que no hay brecha que comparar. "
+                "El reporte se actualizará solo en cuanto se llene esa columna."
+            )
+        return "<ul class='notas'>" + "".join(f"<li>{n}</li>" for n in notas) + "</ul>"
+
     # -- resumen ejecutivo -------------------------------------------------
 
     @staticmethod
-    def _construir_destacados(resumen: ResumenTaller) -> str:
-        mejor_actual: tuple[TipoCultura, float] | None = None
-        brechas_validas: list[tuple[TipoCultura, float]] = []
+    def _construir_destacados(resumen: ResumenTaller, momentos: tuple[Momento, ...]) -> str:
+        if not momentos:
+            return '<p class="ayuda">Todavía no hay calificaciones para destacar hallazgos.</p>'
 
-        for tipo_cultura in TipoCultura:
-            actual = resumen.para(tipo_cultura, Momento.ACTUAL)
-            pasado = resumen.para(tipo_cultura, Momento.PASADO)
-            if actual is not None:
-                if mejor_actual is None or actual.promedio_ponderado > mejor_actual[1]:
-                    mejor_actual = (tipo_cultura, actual.promedio_ponderado)
-            if actual is not None and pasado is not None:
-                brechas_validas.append((tipo_cultura, round(actual.promedio_ponderado - pasado.promedio_ponderado, 2)))
-
-        mayor_progreso = max(brechas_validas, key=lambda t: t[1], default=None)
-        if mayor_progreso is not None and mayor_progreso[1] <= 0:
-            mayor_progreso = None
-        mayor_retroceso = min(brechas_validas, key=lambda t: t[1], default=None)
-        if mayor_retroceso is not None and mayor_retroceso[1] >= 0:
-            mayor_retroceso = None
+        # El momento de referencia es ACTUAL si tiene datos; si no, PASADO.
+        referencia = momentos[-1]
+        puntajes = [
+            (tc, r.promedio_ponderado)
+            for tc in TipoCultura
+            if (r := resumen.para(tc, referencia)) is not None and r.total > 0
+        ]
 
         tarjetas = []
-        if mejor_actual:
-            tipo_cultura, valor = mejor_actual
+        if puntajes:
+            mejor = max(puntajes, key=lambda t: t[1])
+            peor = min(puntajes, key=lambda t: t[1])
             tarjetas.append(
-                _tarjeta_destacado("★", None, "Mejor cultura hoy (ACTUAL)", tipo_cultura.value, f"{valor:.2f} / 2.00")
+                _tarjeta_destacado(
+                    "★", COLOR_BUENO, f"Cultura más presente ({referencia.value})",
+                    mejor[0].value, f"{mejor[1]:.2f} / 2.00",
+                )
             )
-        if mayor_progreso:
-            tipo_cultura, valor = mayor_progreso
-            tarjetas.append(
-                _tarjeta_destacado("▲", COLOR_BUENO, "Mayor progreso", tipo_cultura.value, f"{valor:+.2f}")
-            )
-        if mayor_retroceso:
-            tipo_cultura, valor = mayor_retroceso
-            tarjetas.append(
-                _tarjeta_destacado("▼", COLOR_CRITICO, "Mayor retroceso", tipo_cultura.value, f"{valor:+.2f}")
-            )
+            if peor[0] is not mejor[0]:
+                tarjetas.append(
+                    _tarjeta_destacado(
+                        "○", COLOR_CRITICO, f"Cultura menos presente ({referencia.value})",
+                        peor[0].value, f"{peor[1]:.2f} / 2.00",
+                    )
+                )
+
+        comparables = _culturas_comparables(resumen)
+        if comparables:
+            brechas = [(tc, resumen.brecha(tc)) for tc in comparables]
+            mayor_progreso = max(brechas, key=lambda t: t[1])
+            if mayor_progreso[1] > 0:
+                tarjetas.append(
+                    _tarjeta_destacado(
+                        "▲", COLOR_BUENO, "Mayor progreso",
+                        mayor_progreso[0].value, f"{mayor_progreso[1]:+.2f}",
+                    )
+                )
 
         if not tarjetas:
             return '<p class="ayuda">Todavía no hay suficientes calificaciones para destacar hallazgos.</p>'
         return f'<div class="destacados">{"".join(tarjetas)}</div>'
 
+    # -- sección de brecha (solo si tiene sentido) ---------------------------
+
+    def _seccion_brecha(self, resumen: ResumenTaller, momentos: tuple[Momento, ...]) -> str:
+        comparables = _culturas_comparables(resumen)
+        if len(momentos) < 2 or not comparables:
+            faltante = (
+                Momento.ACTUAL.value
+                if Momento.ACTUAL not in momentos
+                else Momento.PASADO.value
+            )
+            return (
+                '<section class="seccion">'
+                "<h2>Brecha ACTUAL − PASADO</h2>"
+                '<p class="aviso">No se puede calcular todavía: el momento '
+                f"<strong>{_escapar(faltante)}</strong> no tiene valoraciones registradas. "
+                "Cuando el taller complete ese momento, esta sección mostrará "
+                "automáticamente cuánto avanzó o retrocedió cada cultura.</p>"
+                "</section>"
+            )
+        return (
+            '<section class="seccion">'
+            "<h2>Brecha ACTUAL − PASADO</h2>"
+            '<p class="ayuda">Diferencia del promedio ponderado. Azul = mejora, rojo = retrocede. '
+            f"Se muestran las {len(comparables)} culturas con datos en ambos momentos.</p>"
+            f"{self._grafico_brecha(resumen, comparables)}"
+            "</section>"
+        )
+
     # -- gráfico A: barras agrupadas PASADO/ACTUAL -----------------------
 
     @staticmethod
-    def _grafico_barras_agrupadas(resumen: ResumenTaller) -> str:
+    def _grafico_barras_agrupadas(resumen: ResumenTaller, momentos: tuple[Momento, ...]) -> str:
+        if not momentos:
+            return '<p class="aviso">Sin datos para graficar.</p>'
+
+        color_de = {Momento.PASADO: COLOR_PASADO, Momento.ACTUAL: COLOR_ACTUAL}
         label_w, chart_w, pad_right = 190, 420, 50
         bar_h, bar_gap, group_gap = 16, 4, 14
         top_pad = 28
         ancho = label_w + chart_w + pad_right + 20
+
+        # Las culturas se ordenan por el momento de referencia: el reporte se
+        # lee como un ranking, no como una lista arbitraria.
+        referencia = momentos[-1]
+        culturas = sorted(
+            TipoCultura,
+            key=lambda tc: (r.promedio_ponderado if (r := resumen.para(tc, referencia)) else -1),
+            reverse=True,
+        )
+
         filas_svg = []
         y = top_pad
-        for tipo_cultura in TipoCultura:
-            pasado = resumen.para(tipo_cultura, Momento.PASADO)
-            actual = resumen.para(tipo_cultura, Momento.ACTUAL)
+        for tipo_cultura in culturas:
+            centro = y + (len(momentos) * (bar_h + bar_gap) - bar_gap) / 2
             filas_svg.append(
-                f'<text x="10" y="{y + bar_h + bar_gap / 2 + 4}" class="etiqueta-fila">'
+                f'<text x="10" y="{centro + 4:.1f}" class="etiqueta-fila">'
                 f"{_escapar(tipo_cultura.value)}</text>"
             )
-            for r, color in ((pasado, COLOR_PASADO), (actual, COLOR_ACTUAL)):
-                valor = r.promedio_ponderado if r else 0.0
-                ancho_barra = (valor / MAX_ESCALA_PROMEDIO) * chart_w if r else 0
-                texto_valor = f"{valor:.2f}" if r else "s/d"
-                x_texto = label_w + ancho_barra + 6
-                filas_svg.append(
-                    f'<rect x="{label_w}" y="{y}" width="{max(ancho_barra, 1) if r else 0}" '
-                    f'height="{bar_h}" rx="4" class="barra" fill="{color}"><title>'
-                    f"{_escapar(tipo_cultura.value)} — {texto_valor}</title></rect>"
-                )
-                if r:
+            for momento in momentos:
+                r = resumen.para(tipo_cultura, momento)
+                tiene = r is not None and r.total > 0
+                valor = r.promedio_ponderado if tiene else 0.0
+                ancho_barra = (valor / MAX_ESCALA_PROMEDIO) * chart_w if tiene else 0
+                texto_valor = f"{valor:.2f}" if tiene else "s/d"
+                if tiene:
                     filas_svg.append(
-                        f'<text x="{x_texto}" y="{y + bar_h - 3}" class="valor-barra">{texto_valor}</text>'
+                        f'<rect x="{label_w}" y="{y}" width="{max(ancho_barra, 1):.1f}" '
+                        f'height="{bar_h}" rx="4" class="barra" fill="{color_de[momento]}"><title>'
+                        f"{_escapar(tipo_cultura.value)} · {momento.value} — {texto_valor} "
+                        f"({r.total} respuestas)</title></rect>"
                     )
+                filas_svg.append(
+                    f'<text x="{label_w + ancho_barra + 6:.1f}" y="{y + bar_h - 3}" '
+                    f'class="valor-barra">{texto_valor}</text>'
+                )
                 y += bar_h + bar_gap
             y += group_gap
         alto = y + 10
 
         ticks = []
         for i in range(3):  # 0, 1, 2
-            x = label_w + (i / (MAX_ESCALA_PROMEDIO)) * chart_w if MAX_ESCALA_PROMEDIO else label_w
+            x = label_w + (i / MAX_ESCALA_PROMEDIO) * chart_w
             ticks.append(
                 f'<line x1="{x}" y1="{top_pad - 10}" x2="{x}" y2="{alto - 10}" class="linea-guia" />'
                 f'<text x="{x}" y="{top_pad - 14}" class="etiqueta-eje" text-anchor="middle">{i}</text>'
             )
 
-        leyenda = (
-            '<div class="leyenda">'
-            f'<span class="leyenda-item"><i style="background:{COLOR_PASADO}"></i>PASADO</span>'
-            f'<span class="leyenda-item"><i style="background:{COLOR_ACTUAL}"></i>ACTUAL</span>'
-            "</div>"
-        )
+        leyenda = ""
+        if len(momentos) > 1:
+            leyenda = (
+                '<div class="leyenda">'
+                + "".join(
+                    f'<span class="leyenda-item"><i style="background:{color_de[m]}"></i>'
+                    f"{m.value}</span>"
+                    for m in momentos
+                )
+                + "</div>"
+            )
         svg = (
             f'<svg viewBox="0 0 {ancho} {alto}" class="grafico" role="img" '
-            f'aria-label="Promedio ponderado por tipo de cultura, PASADO versus ACTUAL">'
+            f'aria-label="Promedio ponderado por tipo de cultura">'
             + "".join(ticks)
             + "".join(filas_svg)
             + "</svg>"
@@ -271,18 +390,18 @@ class ExportadorReporteHTML(ExportadorReporte):
     # -- gráfico B: brecha divergente -------------------------------------
 
     @staticmethod
-    def _grafico_brecha(resumen: ResumenTaller) -> str:
+    def _grafico_brecha(resumen: ResumenTaller, culturas: list[TipoCultura]) -> str:
         label_w, half_w, pad = 190, 210, 50
         bar_h, gap, top_pad = 20, 12, 24
         ancho = label_w + 2 * half_w + pad
         centro_x = label_w + half_w
 
-        brechas = {tc: resumen.brecha(tc) for tc in TipoCultura}
+        brechas = {tc: resumen.brecha(tc) for tc in culturas}
         maximo = max(0.5, max(abs(v) for v in brechas.values()))
 
         filas_svg = []
         y = top_pad
-        for tipo_cultura in TipoCultura:
+        for tipo_cultura in culturas:
             valor = brechas[tipo_cultura]
             ancho_barra = (abs(valor) / maximo) * half_w
             color = COLOR_POSITIVO if valor >= 0 else COLOR_NEGATIVO
@@ -540,6 +659,14 @@ body { background: var(--page-plane); }
 }
 .tabla th { color: var(--text-secondary); font-weight: 600; position: sticky; top: 0; background: var(--surface-1); }
 .tabla tbody tr:nth-child(even) { background: rgba(128, 128, 128, 0.07); }
+.aviso {
+  margin: 8px 0 0; padding: 12px 14px; border-radius: 8px; font-size: 0.88rem;
+  color: var(--text-secondary); background: rgba(128,128,128,0.10);
+  border-left: 3px solid var(--baseline);
+}
+.notas { margin: 8px 0 0; padding-left: 20px; color: var(--text-secondary); font-size: 0.88rem; line-height: 1.6; }
+.notas li { margin-bottom: 8px; }
+.notas code { font-size: 0.85em; background: rgba(128,128,128,0.12); padding: 1px 4px; border-radius: 3px; }
 .pie { margin-top: 32px; color: var(--text-muted); font-size: 0.8rem; text-align: center; }
 
 @media print {

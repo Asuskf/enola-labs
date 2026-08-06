@@ -13,11 +13,17 @@ from dataclasses import dataclass
 from taller_cultura.domain.model import Aspecto, Calificacion, Calificador, Empresa
 from taller_cultura.domain.services import (
     CalculadoraResumen,
+    DiagnosticoTaller,
     ResumenCategoria,
     ResumenTaller,
 )
 
-from .ports import ExportadorReporte, LectorTaller, RepositorioTaller
+from .ports import (
+    ExportadorPlantilla,
+    ExportadorReporte,
+    LectorTaller,
+    RepositorioTaller,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,19 +107,27 @@ class CalcularResumenTaller:
 @dataclass(frozen=True, slots=True)
 class ReporteTaller:
     """Todo lo que un adaptador de reporte (Excel, HTML, ...) necesita para
-    producir su salida: título/contexto, el resumen agregado y el desglose
-    por categoría.
+    producir su salida: título/contexto, el resumen agregado, el desglose
+    por categoría y el diagnóstico de cobertura de los datos.
     """
 
     titulo: str
     resumen: ResumenTaller
     detalle_categoria: tuple[ResumenCategoria, ...]
     calificadores_participantes: int
+    base_calculo: str
+    diagnostico: DiagnosticoTaller
 
 
 class CalcularReporteTaller:
     """Calcula el resumen agregado Y el desglose por categoría, listos para
     entregarle a un `ExportadorReporte`.
+
+    Por defecto usa **solo las filas de CONSENSO**, que es la unidad de
+    análisis del taller: el libro original agrega exactamente así (sus
+    hojas FINAL y CULTURAS cuentan una sola fila —la de consenso— por
+    ítem). Pasar `solo_consenso=False` incluye además las calificaciones
+    individuales de cada participante.
     """
 
     def __init__(
@@ -124,7 +138,7 @@ class CalcularReporteTaller:
         self._repositorio = repositorio
         self._calculadora = calculadora or CalculadoraResumen()
 
-    def ejecutar(self, *, titulo: str | None = None, solo_consenso: bool = False) -> ReporteTaller:
+    def ejecutar(self, *, titulo: str | None = None, solo_consenso: bool = True) -> ReporteTaller:
         aspectos = self._repositorio.listar_aspectos()
         calificaciones = self._repositorio.listar_calificaciones()
 
@@ -132,8 +146,12 @@ class CalcularReporteTaller:
             empresas = self._repositorio.listar_empresas()
             titulo = empresas[0].nombre if empresas else "Taller de cultura organizacional"
 
+        consideradas = (
+            [c for c in calificaciones if c.es_consenso] if solo_consenso else calificaciones
+        )
+
         resumen = self._calculadora.calcular(aspectos, calificaciones, solo_consenso=solo_consenso)
-        detalle_categoria = self._calculadora.calcular_detalle_por_categoria(aspectos, calificaciones)
+        detalle_categoria = self._calculadora.calcular_detalle_por_categoria(aspectos, consideradas)
         calificadores_participantes = len(
             {c.calificador_codigo for c in calificaciones if not c.es_consenso}
         )
@@ -142,6 +160,8 @@ class CalcularReporteTaller:
             resumen=resumen,
             detalle_categoria=detalle_categoria,
             calificadores_participantes=calificadores_participantes,
+            base_calculo="Consenso del grupo" if solo_consenso else "Todas las respuestas",
+            diagnostico=self._calculadora.diagnosticar(aspectos, consideradas),
         )
 
 
@@ -153,3 +173,20 @@ class ExportarReporteTaller:
 
     def ejecutar(self, reporte: ReporteTaller, ruta_destino: str) -> None:
         self._exportador.exportar_reporte(reporte, ruta_destino)
+
+
+class ExportarPlantillaTaller:
+    """Produce el archivo que efectivamente se reparte a los participantes.
+
+    Del libro original solo se envía la hoja TALLER (más el roster de
+    CALIFICADORES, al que TALLER hace referencia). Todo lo demás —RESUMEN,
+    PRESENTACION, FINAL, CULTURAS— es material derivado y su contenido va
+    en el reporte que genera esta aplicación, no en el archivo que se
+    reparte.
+    """
+
+    def __init__(self, exportador: ExportadorPlantilla) -> None:
+        self._exportador = exportador
+
+    def ejecutar(self, ruta_excel_origen: str, ruta_destino: str) -> None:
+        self._exportador.exportar_plantilla(ruta_excel_origen, ruta_destino)

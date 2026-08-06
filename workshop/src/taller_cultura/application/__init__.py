@@ -9,6 +9,7 @@ calcule, entrega al exportador.
 from .use_cases import (
     CalcularReporteTaller,
     CalcularResumenTaller,
+    ExportarPlantillaTaller,
     ExportarReporteTaller,
     ImportarTallerDesdeExcel,
     ReporteTaller,
@@ -17,6 +18,7 @@ from .use_cases import (
 __all__ = [
     "CalcularReporteTaller",
     "CalcularResumenTaller",
+    "ExportarPlantillaTaller",
     "ExportarReporteTaller",
     "ImportarTallerDesdeExcel",
     "ReporteTaller",

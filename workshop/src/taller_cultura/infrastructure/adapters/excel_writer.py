@@ -25,13 +25,31 @@ class ExportadorReporteExcel(ExportadorReporte):
         df_resumen = self._construir_dataframe_resumen(reporte.resumen)
         df_brechas = self._construir_dataframe_brechas(reporte.resumen)
         df_detalle = self._construir_dataframe_detalle(reporte)
+        df_ficha = self._construir_dataframe_ficha(reporte)
 
         ruta = Path(ruta_destino)
         ruta.parent.mkdir(parents=True, exist_ok=True)
         with pd.ExcelWriter(ruta, engine="openpyxl") as writer:
+            df_ficha.to_excel(writer, sheet_name="Ficha", index=False)
             df_resumen.to_excel(writer, sheet_name="Resumen", index=False)
             df_brechas.to_excel(writer, sheet_name="Brechas", index=False)
             df_detalle.to_excel(writer, sheet_name="Detalle por categoria", index=False)
+
+    @staticmethod
+    def _construir_dataframe_ficha(reporte: ReporteTaller) -> pd.DataFrame:
+        d = reporte.diagnostico
+        filas = [
+            ("Taller", reporte.titulo),
+            ("Base de cálculo", reporte.base_calculo),
+            ("Ítems del taller", d.total_aspectos),
+            ("Ítems calificados", d.aspectos_calificados),
+            ("Ítems sin calificar", d.aspectos_sin_calificar),
+            ("Cobertura (%)", d.porcentaje_cobertura),
+            ("Respuestas de consenso", d.respuestas_consenso),
+            ("Respuestas individuales", d.respuestas_individuales),
+            ("Calificadores participantes", reporte.calificadores_participantes),
+        ]
+        return pd.DataFrame(filas, columns=["Concepto", "Valor"])
 
     @staticmethod
     def _construir_dataframe_resumen(resumen: ResumenTaller) -> pd.DataFrame:

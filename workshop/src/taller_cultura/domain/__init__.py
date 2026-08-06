@@ -15,7 +15,13 @@ from .model import (
     TipoCultura,
     Valoracion,
 )
-from .services import CalculadoraResumen, ResumenCategoria, ResumenCultura, ResumenTaller
+from .services import (
+    CalculadoraResumen,
+    DiagnosticoTaller,
+    ResumenCategoria,
+    ResumenCultura,
+    ResumenTaller,
+)
 
 __all__ = [
     "Aspecto",
@@ -27,6 +33,7 @@ __all__ = [
     "TipoCultura",
     "Valoracion",
     "CalculadoraResumen",
+    "DiagnosticoTaller",
     "ResumenCategoria",
     "ResumenCultura",
     "ResumenTaller",

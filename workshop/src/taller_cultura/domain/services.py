@@ -99,8 +99,46 @@ class ResumenTaller:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class DiagnosticoTaller:
+    """Cobertura de los datos: cuánto del taller está realmente calificado.
+
+    Sirve para leer el resumen con criterio: un promedio calculado sobre 3
+    respuestas no vale lo mismo que uno calculado sobre 30.
+    """
+
+    total_aspectos: int
+    aspectos_calificados: int
+    respuestas_consenso: int
+    respuestas_individuales: int
+
+    @property
+    def aspectos_sin_calificar(self) -> int:
+        return self.total_aspectos - self.aspectos_calificados
+
+    @property
+    def porcentaje_cobertura(self) -> float:
+        if self.total_aspectos == 0:
+            return 0.0
+        return round(100 * self.aspectos_calificados / self.total_aspectos, 1)
+
+
 class CalculadoraResumen:
     """Servicio de dominio que agrega calificaciones en resúmenes por cultura."""
+
+    def diagnosticar(
+        self,
+        aspectos: list[Aspecto],
+        calificaciones: list[Calificacion],
+    ) -> DiagnosticoTaller:
+        ids_validos = {a.id for a in aspectos if a.id is not None}
+        calificados = {c.aspecto_id for c in calificaciones if c.aspecto_id in ids_validos}
+        return DiagnosticoTaller(
+            total_aspectos=len(aspectos),
+            aspectos_calificados=len(calificados),
+            respuestas_consenso=sum(1 for c in calificaciones if c.es_consenso),
+            respuestas_individuales=sum(1 for c in calificaciones if not c.es_consenso),
+        )
 
     def calcular(
         self,

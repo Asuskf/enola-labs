@@ -82,3 +82,14 @@ class ExportadorReporte(ABC):
     @abstractmethod
     def exportar_reporte(self, reporte, ruta_destino: str) -> None:
         ...
+
+
+class ExportadorPlantilla(ABC):
+    """Puerto de salida: produce el archivo que se reparte a los participantes.
+
+    Solo la hoja de trabajo del taller; el material derivado va al reporte.
+    """
+
+    @abstractmethod
+    def exportar_plantilla(self, ruta_excel_origen: str, ruta_destino: str) -> None:
+        ...
