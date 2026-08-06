@@ -26,6 +26,7 @@ from taller_cultura.domain.model import (
 )
 from taller_cultura.domain.services import (
     CalculadoraResumen,
+    ComparacionCategoria,
     ComparacionTaller,
     ComparadorSesiones,
     DiagnosticoTaller,
@@ -241,6 +242,7 @@ class ReporteComparativo:
     antes: ReporteTaller
     ahora: ReporteTaller
     comparacion: ComparacionTaller
+    comparacion_categoria: tuple[ComparacionCategoria, ...]
     momento: Momento
 
     @property
@@ -274,6 +276,9 @@ class CompararSesiones:
             antes=antes,
             ahora=ahora,
             comparacion=self._comparador.comparar(antes.resumen, ahora.resumen, momento),
+            comparacion_categoria=self._comparador.comparar_por_categoria(
+                antes.detalle_categoria, ahora.detalle_categoria
+            ),
             momento=momento,
         )
 

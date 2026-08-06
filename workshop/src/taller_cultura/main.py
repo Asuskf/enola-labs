@@ -155,6 +155,20 @@ def _comando_sesiones(args: argparse.Namespace) -> None:
         )
 
 
+def _comando_borrar(args: argparse.Namespace) -> None:
+    with RepositorioTallerSQLite(args.bd) as repositorio:
+        sesion = repositorio.obtener_sesion(args.sesion)
+        if sesion is None:
+            raise SystemExit(f"No existe la sesión {args.sesion}")
+        if not args.si:
+            respuesta = input(f"¿Borrar «{sesion.titulo}» y sus valoraciones? [s/N] ")
+            if respuesta.strip().lower() not in {"s", "si", "sí"}:
+                print("Cancelado.")
+                return
+        repositorio.eliminar_sesion(args.sesion)
+    print(f"Borrado: {sesion.titulo}")
+
+
 def _comando_reporte(args: argparse.Namespace) -> None:
     solo_consenso = not args.todas
     with RepositorioTallerSQLite(args.bd) as repositorio:
@@ -280,6 +294,11 @@ def construir_parser() -> argparse.ArgumentParser:
     p_sesiones = subparsers.add_parser("sesiones", help="Lista las sesiones registradas.")
     p_sesiones.add_argument("--empresa", default=None)
     p_sesiones.set_defaults(func=_comando_sesiones)
+
+    p_borrar = subparsers.add_parser("borrar", help="Borra una sesión y sus valoraciones.")
+    p_borrar.add_argument("--sesion", required=True, type=int, help="ID de la sesión")
+    p_borrar.add_argument("--si", action="store_true", help="No preguntar confirmación")
+    p_borrar.set_defaults(func=_comando_borrar)
 
     p_reporte = subparsers.add_parser("reporte", help="Reporte de una sesión.")
     p_reporte.add_argument("--sesion", required=True, type=int, help="ID de la sesión")

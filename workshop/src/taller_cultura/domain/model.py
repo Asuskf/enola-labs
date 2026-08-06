@@ -45,6 +45,21 @@ class TipoCultura(str, Enum):
                 return miembro
         raise TipoCulturaDesconocido(f"Tipo de cultura desconocido: {texto!r}")
 
+    @property
+    def animal(self) -> str:
+        """El animal con que el taller representa a cada cultura.
+
+        Es parte del lenguaje del taller —así titula sus gráficos la hoja
+        CULTURAS del libro original—, así que el reporte lo conserva.
+        """
+        return {
+            "LOGRO": "Águila real",
+            "CENTRADA EN EL CLIENTE": "Delfín",
+            "EQUIPO UNICO": "Lobo",
+            "INNOVADORA": "Pulpo",
+            "LAS PERSONAS PRIMERO": "Colibrí",
+        }[self.value]
+
 
 class CategoriaAspecto(str, Enum):
     """Las categorías dentro de las cuales se agrupan los ítems evaluados."""

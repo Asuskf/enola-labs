@@ -86,6 +86,7 @@ class AplicacionTaller(ttk.Frame):
         self._cola: queue.Queue = queue.Queue()
         self._sesion_actual_id: int | None = None
         self._ultimo_html: Path | None = None
+        self._reportes_generados: list[Path] = []
         self._botones: list[ttk.Button] = []
 
         self._construir_seccion_taller()
@@ -205,9 +206,19 @@ class AplicacionTaller(ttk.Frame):
         self.tabla.grid(row=1, column=0, sticky="nsew")
         self._configurar_columnas(distingue_momentos=False)
 
-        self.boton_abrir = ttk.Button(marco, text="Abrir último reporte", command=self._abrir)
-        self.boton_abrir.grid(row=2, column=0, sticky="w", pady=(8, 0))
+        acciones = ttk.Frame(marco)
+        acciones.grid(row=2, column=0, sticky="w", pady=(8, 0))
+
+        self.boton_abrir = ttk.Button(acciones, text="Abrir último reporte", command=self._abrir)
+        self.boton_abrir.grid(row=0, column=0, padx=(0, 6))
         self.boton_abrir.state(["disabled"])
+
+        ttk.Button(
+            acciones, text="Reportes anteriores…", command=self._ver_reportes
+        ).grid(row=0, column=1, padx=(0, 6))
+        ttk.Button(
+            acciones, text="Talleres guardados…", command=self._administrar_sesiones
+        ).grid(row=0, column=2)
 
     def _construir_barra_estado(self) -> None:
         barra = ttk.Frame(self)
@@ -216,8 +227,11 @@ class AplicacionTaller(ttk.Frame):
         ttk.Label(barra, textvariable=self.estado, foreground="#52514e", wraplength=560).grid(
             row=0, column=0, sticky="w"
         )
-        self.progreso = ttk.Progressbar(barra, mode="indeterminate", length=120)
+        # La barra solo existe mientras algo está corriendo: al terminar se
+        # oculta en vez de quedarse pintada a medias.
+        self.progreso = ttk.Progressbar(barra, mode="indeterminate", length=140)
         self.progreso.grid(row=0, column=1, sticky="e")
+        self.progreso.grid_remove()
 
     # -- modo nuevo / nueva versión -----------------------------------------------
 
@@ -431,11 +445,42 @@ class AplicacionTaller(ttk.Frame):
         if self._ultimo_html and self._ultimo_html.exists():
             webbrowser.open(self._ultimo_html.resolve().as_uri())
 
+    def _ver_reportes(self) -> None:
+        """Lista los reportes ya generados para volver a abrirlos."""
+        generados = [r for r in self._reportes_generados if r.exists()]
+        if not generados:
+            messagebox.showinfo(
+                TITULO,
+                "Todavía no has generado ningún reporte en esta sesión.\n\n"
+                "Genera uno con «Reporte HTML» y aparecerá aquí.",
+            )
+            return
+        _DialogoReportes(self, generados)
+
+    def _administrar_sesiones(self) -> None:
+        """Ver y borrar los talleres guardados."""
+        sesiones = self._sesiones()
+        if not sesiones:
+            messagebox.showinfo(TITULO, "No hay talleres guardados todavía.")
+            return
+
+        borrados = _DialogoSesiones(self, sesiones, self.ruta_bd.get()).borrados
+        if not borrados:
+            return
+        if self._sesion_actual_id in borrados:
+            self._sesion_actual_id = None
+            self.tabla.delete(*self.tabla.get_children())
+            self.etiqueta_cobertura.config(text="Todavía no se ha procesado ningún taller.")
+        self.estado.set(f"{len(borrados)} taller(es) borrado(s).")
+        self._cargar_empresas()
+        self._refrescar_sesiones()
+
     # -- ejecución asíncrona -------------------------------------------------------------
 
     def _en_hilo(self, tarea, mensaje: str) -> None:
         self.estado.set(mensaje)
-        self.progreso.start(12)
+        self.progreso.grid()
+        self.progreso.start(15)
         self._bloquear(True)
 
         def envoltura():
@@ -458,6 +503,8 @@ class AplicacionTaller(ttk.Frame):
 
     def _atender(self, mensaje: tuple) -> None:
         self.progreso.stop()
+        self.progreso["value"] = 0  # sin esto queda un bloque pintado a medias
+        self.progreso.grid_remove()
         self._bloquear(False)
         tipo = mensaje[0]
 
@@ -494,6 +541,8 @@ class AplicacionTaller(ttk.Frame):
             self.estado.set(f"Guardado en {dato}")
             if dato.suffix.lower() in {".html", ".htm"}:
                 self._ultimo_html = dato
+                if dato not in self._reportes_generados:
+                    self._reportes_generados.append(dato)
                 self.boton_abrir.state(["!disabled"])
 
     def _bloquear(self, ocupado: bool) -> None:
@@ -605,6 +654,129 @@ class _DialogoComparar(tk.Toplevel):
             return
         self.resultado = (antes.id, ahora.id)
         self.destroy()
+
+
+class _DialogoReportes(tk.Toplevel):
+    """Lista los reportes generados para volver a abrirlos."""
+
+    def __init__(self, padre: tk.Misc, reportes: list[Path]) -> None:
+        super().__init__(padre)
+        self.title("Reportes generados")
+        self.resizable(True, False)
+        self._reportes = reportes
+
+        marco = ttk.Frame(self, padding=14)
+        marco.grid(sticky="nsew")
+        marco.columnconfigure(0, weight=1)
+        self.columnconfigure(0, weight=1)
+
+        ttk.Label(marco, text="Doble clic para abrirlo en el navegador:").grid(
+            row=0, column=0, sticky="w", pady=(0, 8)
+        )
+        self.lista = tk.Listbox(marco, height=min(10, max(3, len(reportes))), width=70)
+        for ruta in reportes:
+            self.lista.insert("end", f"{ruta.name}   —   {ruta.parent}")
+        self.lista.selection_set(len(reportes) - 1)
+        self.lista.grid(row=1, column=0, sticky="ew")
+        self.lista.bind("<Double-Button-1>", lambda _e: self._abrir())
+
+        botones = ttk.Frame(marco)
+        botones.grid(row=2, column=0, sticky="e", pady=(12, 0))
+        ttk.Button(botones, text="Cerrar", command=self.destroy).grid(row=0, column=0, padx=(0, 8))
+        ttk.Button(botones, text="Abrir", command=self._abrir).grid(row=0, column=1)
+
+        self.transient(padre)
+        self.grab_set()
+        padre.wait_window(self)
+
+    def _abrir(self) -> None:
+        seleccion = self.lista.curselection()
+        if not seleccion:
+            return
+        ruta = self._reportes[seleccion[0]]
+        if ruta.exists():
+            webbrowser.open(ruta.resolve().as_uri())
+        else:
+            messagebox.showwarning(TITULO, f"El archivo ya no está:\n{ruta}", parent=self)
+
+
+class _DialogoSesiones(tk.Toplevel):
+    """Ver los talleres guardados y borrar los que ya no hagan falta."""
+
+    def __init__(self, padre: tk.Misc, sesiones, ruta_bd: str) -> None:
+        super().__init__(padre)
+        self.title("Talleres guardados")
+        self.resizable(True, False)
+        self._ruta_bd = ruta_bd
+        self._sesiones = list(sesiones)
+        self.borrados: list[int] = []
+
+        marco = ttk.Frame(self, padding=14)
+        marco.grid(sticky="nsew")
+        marco.columnconfigure(0, weight=1)
+        self.columnconfigure(0, weight=1)
+
+        columnas = ("empresa", "fecha", "version", "id")
+        self.tabla = ttk.Treeview(
+            marco, columns=columnas, show="headings", height=min(12, max(3, len(sesiones)))
+        )
+        for clave, titulo, ancho, anchor in (
+            ("empresa", "Empresa", 240, "w"),
+            ("fecha", "Fecha del taller", 130, "center"),
+            ("version", "Versión", 80, "center"),
+            ("id", "ID", 60, "center"),
+        ):
+            self.tabla.heading(clave, text=titulo)
+            self.tabla.column(clave, width=ancho, anchor=anchor)
+        self.tabla.grid(row=0, column=0, sticky="ew")
+        self._llenar()
+
+        ttk.Label(
+            marco,
+            text="Borrar un taller elimina también sus valoraciones. No se puede deshacer.",
+            foreground="#52514e",
+        ).grid(row=1, column=0, sticky="w", pady=(8, 0))
+
+        botones = ttk.Frame(marco)
+        botones.grid(row=2, column=0, sticky="e", pady=(12, 0))
+        ttk.Button(botones, text="Cerrar", command=self.destroy).grid(row=0, column=0, padx=(0, 8))
+        ttk.Button(botones, text="Borrar seleccionado", command=self._borrar).grid(row=0, column=1)
+
+        self.transient(padre)
+        self.grab_set()
+        padre.wait_window(self)
+
+    def _llenar(self) -> None:
+        self.tabla.delete(*self.tabla.get_children())
+        for sesion in self._sesiones:
+            self.tabla.insert(
+                "",
+                "end",
+                iid=str(sesion.id),
+                values=(sesion.empresa, sesion.fecha_taller.isoformat(), sesion.numero_version, sesion.id),
+            )
+
+    def _borrar(self) -> None:
+        seleccion = self.tabla.selection()
+        if not seleccion:
+            messagebox.showinfo(TITULO, "Elige el taller que quieres borrar.", parent=self)
+            return
+        sesion_id = int(seleccion[0])
+        sesion = next(s for s in self._sesiones if s.id == sesion_id)
+        if not messagebox.askyesno(
+            TITULO,
+            f"¿Borrar «{sesion.titulo}» y todas sus valoraciones?\n\nEsto no se puede deshacer.",
+            parent=self,
+        ):
+            return
+
+        with RepositorioTallerSQLite(self._ruta_bd) as repo:
+            repo.eliminar_sesion(sesion_id)
+        self.borrados.append(sesion_id)
+        self._sesiones = [s for s in self._sesiones if s.id != sesion_id]
+        self._llenar()
+        if not self._sesiones:
+            self.destroy()
 
 
 def _aplicar_tema(raiz: tk.Tk) -> None:

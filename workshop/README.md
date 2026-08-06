@@ -13,8 +13,40 @@ archivo que se envía.
 | Entregable | Qué es | Cómo se genera |
 |---|---|---|
 | **Plantilla** (`.xlsx`) | Solo la hoja TALLER + roster. Es lo único que se envía. | «Plantilla para enviar» / `plantilla` |
-| **Reporte** (`.html` / `.xlsx`) | El análisis de una sesión: KPIs, tarta, gráficos, tablas, notas. | «Reporte HTML/Excel» / `reporte` |
+| **Reporte** (`.html` / `.xlsx`) | El análisis de una sesión, en pestañas. | «Reporte HTML/Excel» / `reporte` |
 | **Comparativo** (`.html`) | Antes vs ahora entre dos sesiones de la misma empresa. | «Comparar versiones» / `comparar` |
+
+### Las pestañas
+
+**Los dos reportes —el de una sesión y el comparativo— comparten las mismas
+cinco pestañas**, para que se lean igual. Lo que cambia es el contenido:
+donde el individual muestra un valor, el comparativo muestra el par
+antes/ahora y su variación.
+
+| Pestaña | Reporte de una sesión | Comparativo |
+|---|---|---|
+| **Resumen ejecutivo** | Cifras clave, hallazgos, reparto global del semáforo y promedio por cultura. | Cuántas culturas avanzaron o retrocedieron, mayor avance y retroceso, variación por cultura. |
+| **Por cultura** | Una tarta por cultura, con su animal — como la hoja `CULTURAS`. | Las dos tartas de cada cultura, lado a lado, con su variación. |
+| **Por categoría** | Las 15 tartas (5 culturas × 3 categorías) — como la hoja `FINAL`. | Los 15 pares de tartas, agrupados por categoría. |
+| **Datos** | Tablas completas y distribución por cultura. | Tabla comparativa por cultura y por categoría. |
+| **Cómo leer esto** | Base de cálculo, escala, cobertura y advertencias. | Qué se compara, colores, cobertura de cada medición. |
+
+Al imprimir o guardar como PDF se imprimen **todas** las pestañas, cada una
+en página nueva y encabezada por su título: el PDF nunca pierde contenido
+por quedar una pestaña sin abrir.
+
+### Los colores
+
+El semáforo usa **los colores del propio libro**: rojo `#ED3737`, amarillo
+`#F7F732` y verde `#60C541`, tomados de las tartas de `FINAL` y `CULTURAS`
+(coinciden en significado con el formato condicional de `PRESENTACION`).
+Así el reporte habla el mismo idioma visual que el material que la empresa
+ya conoce. Cada porción lleva además su cantidad y su porcentaje en texto,
+para que el color nunca sea el único canal de información.
+
+Las cinco culturas conservan su animal, como en la hoja `CULTURAS`: LOGRO /
+Águila real · CENTRADA EN EL CLIENTE / Delfín · EQUIPO ÚNICO / Lobo ·
+INNOVADORA / Pulpo · LAS PERSONAS PRIMERO / Colibrí.
 
 ## El flujo de trabajo
 
@@ -134,6 +166,16 @@ mismo en los tres sistemas —y que los tests verifican:
 python -m taller_cultura gui
 ```
 
+Desde la ventana se hace todo el ciclo: elegir si es un taller nuevo o una
+nueva versión, validar el archivo, procesarlo y generar los entregables.
+Abajo, junto a «Abrir último reporte», hay dos botones más:
+
+- **Reportes anteriores…** — lista los reportes generados para volver a
+  abrirlos sin buscarlos en el disco.
+- **Talleres guardados…** — muestra todas las sesiones registradas y
+  permite **borrar** las que ya no hagan falta (pide confirmación; borrar
+  una sesión elimina también sus valoraciones).
+
 ## Uso — línea de comandos
 
 Revisar el archivo sin importarlo:
@@ -162,6 +204,12 @@ Comparar dos sesiones (antes y ahora):
 
 ```bash
 python -m taller_cultura comparar --antes 1 --ahora 2 --salida data/comparativo.html
+```
+
+Borrar una sesión y todas sus valoraciones:
+
+```bash
+python -m taller_cultura borrar --sesion 3
 ```
 
 Generar el archivo que se reparte (solo la hoja TALLER):

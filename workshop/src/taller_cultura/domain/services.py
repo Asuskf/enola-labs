@@ -134,11 +134,23 @@ class ResumenTaller:
         )
 
 
-@dataclass(frozen=True, slots=True)
-class ComparacionCultura:
-    """Cómo se movió un tipo de cultura entre dos sesiones del taller."""
+def _promedio(conteo: "Counter[Valoracion] | None") -> float | None:
+    """Promedio ponderado (0–2) de un conteo por valoración."""
+    if not conteo:
+        return None
+    total = sum(conteo.values())
+    if total == 0:
+        return None
+    return round(sum(v.peso * n for v, n in conteo.items()) / total, 2)
 
-    tipo_cultura: TipoCultura
+
+class _Variacion:
+    """Cálculo del movimiento entre dos promedios.
+
+    Lo comparten la comparación por cultura y la comparación por categoría:
+    la aritmética del "cuánto cambió" es la misma en ambos niveles.
+    """
+
     promedio_antes: float | None
     promedio_ahora: float | None
 
@@ -166,6 +178,25 @@ class ComparacionCultura:
     @property
     def empeoro(self) -> bool:
         return self.variacion is not None and self.variacion < 0
+
+
+@dataclass(frozen=True, slots=True)
+class ComparacionCultura(_Variacion):
+    """Cómo se movió un tipo de cultura entre dos sesiones del taller."""
+
+    tipo_cultura: TipoCultura
+    promedio_antes: float | None
+    promedio_ahora: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class ComparacionCategoria(_Variacion):
+    """Cómo se movió una cultura dentro de una categoría concreta."""
+
+    tipo_cultura: TipoCultura
+    categoria: CategoriaAspecto
+    promedio_antes: float | None
+    promedio_ahora: float | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,6 +252,38 @@ class ComparadorSesiones:
                 )
             )
         return ComparacionTaller(comparaciones=tuple(comparaciones))
+
+    def comparar_por_categoria(
+        self,
+        detalle_antes: tuple["ResumenCategoria", ...],
+        detalle_ahora: tuple["ResumenCategoria", ...],
+    ) -> tuple[ComparacionCategoria, ...]:
+        """Mismo contraste, abierto por categoría del taller.
+
+        Se agregan todos los momentos de cada (cultura, categoría): a este
+        nivel interesa el movimiento entre sesiones, no entre momentos.
+        """
+        def acumular(detalle):
+            totales: dict[tuple[TipoCultura, CategoriaAspecto], Counter[Valoracion]] = {}
+            for r in detalle:
+                clave = (r.tipo_cultura, r.categoria)
+                totales.setdefault(clave, Counter()).update(r.conteo_por_valoracion)
+            return totales
+
+        antes, ahora = acumular(detalle_antes), acumular(detalle_ahora)
+
+        comparaciones = []
+        for clave in sorted(set(antes) | set(ahora), key=lambda k: (k[1].value, k[0].value)):
+            tipo_cultura, categoria = clave
+            comparaciones.append(
+                ComparacionCategoria(
+                    tipo_cultura=tipo_cultura,
+                    categoria=categoria,
+                    promedio_antes=_promedio(antes.get(clave)),
+                    promedio_ahora=_promedio(ahora.get(clave)),
+                )
+            )
+        return tuple(comparaciones)
 
 
 @dataclass(frozen=True, slots=True)

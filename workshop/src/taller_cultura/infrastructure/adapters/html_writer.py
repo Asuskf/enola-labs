@@ -38,13 +38,23 @@ from taller_cultura.domain.services import ResumenTaller
 
 # -- paleta (paridad con la skill de dataviz del proyecto) -----------------
 
+# Semáforo del taller. Son los colores del propio libro original: los de las
+# tartas de las hojas FINAL y CULTURAS, que coinciden en significado con el
+# formato condicional de PRESENTACION (R rojo, A amarillo, V verde). Se
+# conservan tal cual para que el reporte hable el mismo idioma visual que el
+# material que la empresa ya conoce.
+COLOR_BAJO = "#ED3737"  # R — rojo
+COLOR_MEDIO = "#F7F732"  # A — amarillo
+COLOR_ALTO = "#60C541"  # V — verde
+
+# El amarillo no da contraste suficiente sobre fondo claro para texto ni para
+# trazos finos; para esos usos se emplea una versión entintada del mismo tono.
+COLOR_MEDIO_TEXTO = "#8a7a00"
+
 COLOR_PASADO = "#2a78d6"  # categórico slot 1 (azul)
 COLOR_ACTUAL = "#eb6834"  # categórico slot 2 (naranja)
 COLOR_POSITIVO = "#2a78d6"  # brecha que mejora (par divergente, polo azul)
 COLOR_NEGATIVO = "#e34948"  # brecha que retrocede (par divergente, polo rojo)
-COLOR_BAJO = "#86b6ef"  # rampa secuencial azul, escalón 250 (ordinal, más claro)
-COLOR_MEDIO = "#2a78d6"  # escalón 450
-COLOR_ALTO = "#104281"  # escalón 650 (ordinal, más oscuro)
 COLOR_BUENO = "#0ca30c"  # paleta de estado: good
 COLOR_CRITICO = "#d03b3b"  # paleta de estado: critical
 
@@ -124,6 +134,51 @@ def grafico_tarta(
     return f'<div class="tarta-bloque">{svg}<ul class="tarta-leyenda">{filas}</ul></div>'
 
 
+SEGMENTOS_SEMAFORO = (
+    ("Rojo (R)", Valoracion.BAJO, COLOR_BAJO),
+    ("Amarillo (A)", Valoracion.MEDIO, COLOR_MEDIO),
+    ("Verde (V)", Valoracion.ALTO, COLOR_ALTO),
+)
+
+
+def _segmentos_de(conteo: dict[Valoracion, int]) -> list[tuple[str, int, str]]:
+    """Traduce un conteo por valoración a los segmentos del semáforo."""
+    return [
+        (etiqueta, conteo.get(valoracion, 0), color)
+        for etiqueta, valoracion, color in SEGMENTOS_SEMAFORO
+    ]
+
+
+def _promedio_de(conteo: dict[Valoracion, int]) -> float | None:
+    """Promedio ponderado (0–2) de un conteo suelto por valoración."""
+    total = sum(conteo.values())
+    if total == 0:
+        return None
+    return round(sum(v.peso * n for v, n in conteo.items()) / total, 2)
+
+
+def _pestanas(paneles: list[tuple[str, str, str]]) -> str:
+    """Arma la navegación por pestañas del reporte.
+
+    `paneles` son tuplas (id, título, contenido HTML). La primera queda
+    activa. Sin JavaScript el navegador muestra todos los paneles seguidos,
+    así que el reporte impreso y el guardado como PDF salen completos.
+    """
+    botones = "".join(
+        f'<button class="pestana{" pestana--activa" if i == 0 else ""}" '
+        f'type="button" role="tab" aria-controls="panel-{ident}" '
+        f'aria-selected="{"true" if i == 0 else "false"}" data-panel="panel-{ident}">'
+        f"{_escapar(titulo)}</button>"
+        for i, (ident, titulo, _) in enumerate(paneles)
+    )
+    contenidos = "".join(
+        f'<section class="panel{" panel--activo" if i == 0 else ""}" id="panel-{ident}" '
+        f'role="tabpanel"><h2 class="panel-titulo">{_escapar(titulo)}</h2>{contenido}</section>'
+        for i, (ident, titulo, contenido) in enumerate(paneles)
+    )
+    return f'<nav class="pestanas" role="tablist">{botones}</nav><div class="paneles">{contenidos}</div>'
+
+
 def _leyenda_momentos(momentos: tuple[Momento, ...]) -> str:
     """Aclaración sobre los momentos, solo cuando hay más de uno.
 
@@ -160,21 +215,14 @@ class ExportadorReporteHTML(ExportadorReporte):
     # -- ensamblado ---------------------------------------------------
 
     def _construir_html(self, reporte: ReporteTaller) -> str:
-        momentos = reporte.resumen.momentos_con_datos
-        kpis = self._construir_kpis(reporte)
-        destacados = self._construir_destacados(reporte.resumen, momentos)
-        grafico_promedios = self._grafico_barras_agrupadas(reporte.resumen, momentos)
-        seccion_brecha = self._seccion_brecha(
-            reporte.resumen, momentos, reporte.sesion.numero_version
-        )
-        grafico_distribucion = self._grafico_distribucion(reporte.resumen)
-        tarta = self._tarta_global(reporte.resumen)
-        tabla_resumen = self._tabla_resumen(reporte.resumen)
-        tabla_detalle = self._tabla_detalle_categoria(
-            reporte.detalle_categoria, reporte.resumen.distingue_momentos
-        )
-        notas = self._construir_notas(reporte, momentos)
         generado_en = datetime.now().strftime("%Y-%m-%d %H:%M")
+        paneles = [
+            ("resumen", "Resumen ejecutivo", self._panel_resumen(reporte)),
+            ("culturas", "Por cultura", self._panel_por_cultura(reporte)),
+            ("categorias", "Por categoría", self._panel_por_categoria(reporte)),
+            ("datos", "Datos", self._panel_datos(reporte)),
+            ("metodo", "Cómo leer esto", self._panel_metodo(reporte)),
+        ]
 
         return f"""<!doctype html>
 <html lang="es">
@@ -202,50 +250,7 @@ class ExportadorReporteHTML(ExportadorReporte):
     </div>
   </header>
 
-  <section class="kpis">
-    {kpis}
-  </section>
-
-  <section class="seccion">
-    <h2>Aspectos destacados</h2>
-    {destacados}
-  </section>
-
-  <section class="seccion">
-    <h2>Promedio ponderado por tipo de cultura</h2>
-    <p class="ayuda">Escala 0 (bajo) a 2 (alto). {_escapar(_leyenda_momentos(momentos))}</p>
-    {grafico_promedios}
-  </section>
-
-  {seccion_brecha}
-
-  <section class="seccion">
-    <h2>Distribución global de valoraciones</h2>
-    <p class="ayuda">Cómo se reparten todas las respuestas del taller entre los tres símbolos.</p>
-    {tarta}
-  </section>
-
-  <section class="seccion">
-    <h2>Distribución por tipo de cultura</h2>
-    <p class="ayuda">La misma proporción de R (bajo), A (medio) y V (alto), abierta por cultura.</p>
-    {grafico_distribucion}
-  </section>
-
-  <section class="seccion">
-    <h2>Tabla de datos</h2>
-    {tabla_resumen}
-  </section>
-
-  <section class="seccion">
-    <h2>Detalle por categoría</h2>
-    <p class="ayuda">Mismo cálculo, desglosado por categoría del taller (Tipo de cultura, Comportamientos, Símbolos, Sistemas).</p>
-    {tabla_detalle}
-  </section>
-
-  <section class="seccion">
-    <h2>Cómo leer este reporte</h2>
-    {notas}
-  </section>
+  {_pestanas(paneles)}
 
   <footer class="pie">Generado automáticamente por el ETL del taller de cultura organizacional.</footer>
 </div>
@@ -253,6 +258,141 @@ class ExportadorReporteHTML(ExportadorReporte):
 </body>
 </html>
 """
+
+    # -- paneles ---------------------------------------------------------
+
+    def _panel_resumen(self, reporte: ReporteTaller) -> str:
+        """Lo que se mira primero: cifras clave, hallazgos y el reparto global."""
+        momentos = reporte.resumen.momentos_con_datos
+        return f"""
+    <section class="kpis">{self._construir_kpis(reporte)}</section>
+
+    <div class="bloque">
+      <h3>Aspectos destacados</h3>
+      {self._construir_destacados(reporte.resumen, momentos)}
+    </div>
+
+    <div class="bloque">
+      <h3>Reparto global del semáforo</h3>
+      <p class="ayuda">Cómo se reparten todas las valoraciones del taller entre los tres colores.</p>
+      {self._tarta_global(reporte.resumen)}
+    </div>
+
+    <div class="bloque">
+      <h3>Promedio por tipo de cultura</h3>
+      <p class="ayuda">Escala 0 (rojo) a 2 (verde). {_escapar(_leyenda_momentos(momentos))}</p>
+      {self._grafico_barras_agrupadas(reporte.resumen, momentos)}
+    </div>
+
+    {self._seccion_brecha(reporte.resumen, momentos, reporte.sesion.numero_version)}
+"""
+
+    def _panel_por_cultura(self, reporte: ReporteTaller) -> str:
+        """Una tarta por tipo de cultura, como la hoja CULTURAS del libro."""
+        conteos: dict[TipoCultura, dict[Valoracion, int]] = {}
+        for r in reporte.resumen.resumenes:
+            acumulado = conteos.setdefault(r.tipo_cultura, {})
+            for valoracion, cantidad in r.conteo_por_valoracion.items():
+                acumulado[valoracion] = acumulado.get(valoracion, 0) + cantidad
+
+        tarjetas = []
+        for tipo_cultura in TipoCultura:
+            conteo = conteos.get(tipo_cultura, {})
+            promedio = _promedio_de(conteo)
+            tarjetas.append(
+                '<figure class="tarjeta-tarta">'
+                f'<figcaption><span class="tarjeta-titulo">{_escapar(tipo_cultura.value)}</span>'
+                f'<span class="tarjeta-animal">{_escapar(tipo_cultura.animal)}</span>'
+                + (
+                    f'<span class="tarjeta-promedio">promedio {promedio:.2f} / 2.00</span>'
+                    if promedio is not None
+                    else '<span class="tarjeta-promedio">sin valoraciones</span>'
+                )
+                + "</figcaption>"
+                + grafico_tarta(
+                    _segmentos_de(conteo),
+                    titulo_accesible=f"Reparto de valoraciones de la cultura {tipo_cultura.value}",
+                    diametro=170,
+                    grosor=38,
+                )
+                + "</figure>"
+            )
+        return (
+            '<p class="ayuda">Cada cultura con el reparto de sus valoraciones, igual que '
+            "las tartas de la hoja CULTURAS del libro original.</p>"
+            f'<div class="rejilla-tartas">{"".join(tarjetas)}</div>'
+        )
+
+    def _panel_por_categoria(self, reporte: ReporteTaller) -> str:
+        """Una tarta por cultura dentro de cada categoría, como la hoja FINAL."""
+        conteos: dict[tuple[CategoriaAspecto, TipoCultura], dict[Valoracion, int]] = {}
+        for detalle in reporte.detalle_categoria:
+            clave = (detalle.categoria, detalle.tipo_cultura)
+            acumulado = conteos.setdefault(clave, {})
+            for valoracion, cantidad in detalle.conteo_por_valoracion.items():
+                acumulado[valoracion] = acumulado.get(valoracion, 0) + cantidad
+
+        categorias_presentes = [c for c in CategoriaAspecto if any(k[0] is c for k in conteos)]
+        if not categorias_presentes:
+            return '<p class="aviso">Todavía no hay valoraciones para desglosar.</p>'
+
+        bloques = []
+        for categoria in categorias_presentes:
+            tarjetas = []
+            for tipo_cultura in TipoCultura:
+                conteo = conteos.get((categoria, tipo_cultura), {})
+                if not conteo:
+                    continue
+                promedio = _promedio_de(conteo)
+                tarjetas.append(
+                    '<figure class="tarjeta-tarta tarjeta-tarta--chica">'
+                    f'<figcaption><span class="tarjeta-titulo">{_escapar(tipo_cultura.value)}</span>'
+                    + (
+                        f'<span class="tarjeta-promedio">{promedio:.2f} / 2.00</span>'
+                        if promedio is not None
+                        else ""
+                    )
+                    + "</figcaption>"
+                    + grafico_tarta(
+                        _segmentos_de(conteo),
+                        titulo_accesible=(
+                            f"Reparto de {categoria.value} en la cultura {tipo_cultura.value}"
+                        ),
+                        diametro=140,
+                        grosor=32,
+                    )
+                    + "</figure>"
+                )
+            if tarjetas:
+                bloques.append(
+                    f'<div class="bloque"><h3>{_escapar(categoria.value)}</h3>'
+                    f'<div class="rejilla-tartas">{"".join(tarjetas)}</div></div>'
+                )
+        return (
+            '<p class="ayuda">El mismo reparto abierto por categoría del taller, igual que '
+            "las tartas de la hoja FINAL del libro original.</p>" + "".join(bloques)
+        )
+
+    def _panel_datos(self, reporte: ReporteTaller) -> str:
+        return f"""
+    <div class="bloque">
+      <h3>Resumen por tipo de cultura</h3>
+      {self._tabla_resumen(reporte.resumen)}
+    </div>
+
+    <div class="bloque">
+      <h3>Distribución por tipo de cultura</h3>
+      {self._grafico_distribucion(reporte.resumen)}
+    </div>
+
+    <div class="bloque">
+      <h3>Detalle por categoría</h3>
+      {self._tabla_detalle_categoria(reporte.detalle_categoria, reporte.resumen.distingue_momentos)}
+    </div>
+"""
+
+    def _panel_metodo(self, reporte: ReporteTaller) -> str:
+        return self._construir_notas(reporte, reporte.resumen.momentos_con_datos)
 
     # -- KPIs -----------------------------------------------------------
 
@@ -771,6 +911,49 @@ body { background: var(--page-plane); }
 }
 .tabla th { color: var(--text-secondary); font-weight: 600; position: sticky; top: 0; background: var(--surface-1); }
 .tabla tbody tr:nth-child(even) { background: rgba(128, 128, 128, 0.07); }
+/* -- pestañas -------------------------------------------------------- */
+.pestanas {
+  display: flex; flex-wrap: wrap; gap: 4px; margin: 24px 0 0;
+  border-bottom: 1px solid var(--border);
+}
+.pestana {
+  border: 1px solid transparent; border-bottom: none; background: none;
+  color: var(--text-secondary); font: inherit; font-size: 0.9rem; cursor: pointer;
+  padding: 9px 16px; border-radius: 8px 8px 0 0; margin-bottom: -1px;
+}
+.pestana:hover { background: rgba(128,128,128,0.10); }
+.pestana--activa {
+  background: var(--surface-1); border-color: var(--border);
+  color: var(--text-primary); font-weight: 600;
+}
+.panel { display: none; padding-top: 20px; }
+.panel--activo { display: block; }
+.panel-titulo { position: absolute; left: -9999px; }
+.bloque {
+  background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: 12px; padding: 18px 22px; margin-bottom: 16px;
+}
+.bloque h3 { margin: 0 0 4px; font-size: 1.02rem; }
+
+/* -- rejilla de tartas ------------------------------------------------ */
+.rejilla-tartas {
+  display: grid; gap: 16px; margin-top: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+}
+.tarjeta-tarta {
+  margin: 0; padding: 14px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface-1);
+}
+.tarjeta-tarta figcaption { margin-bottom: 6px; display: flex; flex-direction: column; gap: 1px; }
+.tarjeta-titulo { font-weight: 600; font-size: 0.92rem; }
+.tarjeta-animal { color: var(--text-secondary); font-size: 0.82rem; font-style: italic; }
+.tarjeta-promedio {
+  color: var(--text-secondary); font-size: 0.8rem; font-variant-numeric: tabular-nums;
+}
+.tarjeta-tarta .tarta-bloque { gap: 14px; margin-top: 4px; }
+.tarjeta-tarta .tarta-leyenda li { padding: 5px 0; font-size: 0.82rem; }
+.tarjeta-tarta--chica .tarta-leyenda li { padding: 4px 0; font-size: 0.78rem; }
+
 .tarta-bloque { display: flex; flex-wrap: wrap; align-items: center; gap: 28px; margin-top: 12px; }
 .tarta { width: 210px; height: 210px; flex-shrink: 0; }
 .tarta-total { fill: var(--text-primary); font-size: 30px; font-weight: 600; }
@@ -796,7 +979,16 @@ body { background: var(--page-plane); }
 .pie { margin-top: 32px; color: var(--text-muted); font-size: 0.8rem; text-align: center; }
 
 @media print {
-  .acciones-encabezado { display: none; }
+  .acciones-encabezado, .pestanas { display: none; }
+  /* En papel no hay pestañas que pulsar: se imprimen todos los paneles,
+     cada uno encabezado por su título y empezando en página nueva. */
+  .panel { display: block !important; page-break-before: always; padding-top: 0; }
+  .panel:first-of-type { page-break-before: auto; }
+  .panel-titulo {
+    position: static; left: auto; font-size: 1.25rem; margin: 0 0 12px;
+    padding-bottom: 6px; border-bottom: 2px solid #d8d8d2;
+  }
+  .rejilla-tartas { grid-template-columns: repeat(2, 1fr); }
   body, .viz-root {
     color-scheme: light;
     --page-plane:      #ffffff;
@@ -810,7 +1002,7 @@ body { background: var(--page-plane); }
     background: #ffffff;
   }
   .viz-root { max-width: 100%; padding: 0; margin: 0; }
-  .seccion, .kpi, .destacado, .tabla-envoltorio { break-inside: avoid; }
+  .seccion, .bloque, .kpi, .destacado, .tarjeta-tarta, .tabla-envoltorio { break-inside: avoid; }
   .seccion { border: 1px solid #d8d8d2; }
   a[href]::after { content: ""; }
 }
@@ -819,6 +1011,25 @@ body { background: var(--page-plane); }
 
 _JS = """
 (function () {
+  // Pestañas: sin JavaScript el CSS deja visible solo la primera, pero al
+  // imprimir se muestran todas, así que el PDF nunca pierde contenido.
+  var pestanas = document.querySelectorAll('.pestana');
+  Array.prototype.forEach.call(pestanas, function (boton) {
+    boton.addEventListener('click', function () {
+      Array.prototype.forEach.call(pestanas, function (otro) {
+        otro.classList.remove('pestana--activa');
+        otro.setAttribute('aria-selected', 'false');
+      });
+      Array.prototype.forEach.call(document.querySelectorAll('.panel'), function (panel) {
+        panel.classList.remove('panel--activo');
+      });
+      boton.classList.add('pestana--activa');
+      boton.setAttribute('aria-selected', 'true');
+      var panel = document.getElementById(boton.getAttribute('data-panel'));
+      if (panel) { panel.classList.add('panel--activo'); }
+    });
+  });
+
   var botonTema = document.getElementById('boton-tema');
   if (botonTema) {
     botonTema.addEventListener('click', function () {

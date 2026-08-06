@@ -1,12 +1,13 @@
 """Adaptador de salida: reporte comparativo entre dos sesiones del taller.
 
 Implementa el puerto `ExportadorComparativo`. Responde una sola pregunta:
-**¿en qué cambió la cultura entre la vez pasada y ahora?** Por eso su forma
-es distinta a la del reporte de una sesión: aquí lo que importa no es el
-nivel de cada cultura sino el movimiento entre dos mediciones.
+**¿en qué cambió la cultura entre la vez pasada y ahora?**
 
-Reutiliza la paleta, la tarta y los estilos del reporte individual
-(`html_writer`) para que ambos documentos se lean como una misma familia.
+Comparte estructura con el reporte de una sesión —las mismas cinco
+pestañas, la misma paleta, las mismas tartas— para que ambos documentos se
+lean como una sola familia. Lo que cambia es el contenido: donde el reporte
+individual muestra un valor, este muestra el par antes/ahora y su
+variación.
 """
 
 from __future__ import annotations
@@ -15,9 +16,9 @@ from datetime import datetime
 from pathlib import Path
 
 from taller_cultura.application.ports import ExportadorComparativo
-from taller_cultura.application.use_cases import ReporteComparativo
-from taller_cultura.domain.model import TipoCultura, Valoracion
-from taller_cultura.domain.services import ComparacionCultura
+from taller_cultura.application.use_cases import ReporteComparativo, ReporteTaller
+from taller_cultura.domain.model import CategoriaAspecto, TipoCultura, Valoracion
+from taller_cultura.domain.services import ComparacionCategoria, ComparacionCultura
 
 from .html_writer import (
     _CSS,
@@ -31,6 +32,8 @@ from .html_writer import (
     COLOR_PASADO,
     MAX_ESCALA_PROMEDIO,
     _escapar,
+    _pestanas,
+    _segmentos_de,
     grafico_tarta,
 )
 
@@ -53,10 +56,18 @@ class ExportadorComparativoHTML(ExportadorComparativo):
         antes, ahora = comparativo.antes, comparativo.ahora
         generado_en = datetime.now().strftime("%Y-%m-%d %H:%M")
         # El momento solo se nombra si alguna de las dos mediciones distingue
-        # PASADO de ACTUAL; si cada sesión tiene un único juego de datos, decir
-        # "momento PASADO" es ruido.
+        # PASADO de ACTUAL; si cada sesión tiene un único juego de datos,
+        # decir "momento PASADO" es ruido.
         distingue = antes.resumen.distingue_momentos or ahora.resumen.distingue_momentos
         detalle_momento = f"· momento {comparativo.momento.value} " if distingue else ""
+
+        paneles = [
+            ("resumen", "Resumen ejecutivo", self._panel_resumen(comparativo)),
+            ("culturas", "Por cultura", self._panel_por_cultura(comparativo)),
+            ("categorias", "Por categoría", self._panel_por_categoria(comparativo)),
+            ("datos", "Datos", self._panel_datos(comparativo)),
+            ("metodo", "Cómo leer esto", self._panel_metodo(comparativo)),
+        ]
 
         return f"""<!doctype html>
 <html lang="es">
@@ -74,7 +85,7 @@ class ExportadorComparativoHTML(ExportadorComparativo):
       <p class="subtitulo">Comparativo del taller de cultura organizacional</p>
       <p class="marca-tiempo">
         Antes: v{antes.sesion.numero_version} del {antes.sesion.fecha_taller.isoformat()}
-        &nbsp;→&nbsp;
+        &nbsp;&rarr;&nbsp;
         Ahora: v{ahora.sesion.numero_version} del {ahora.sesion.fecha_taller.isoformat()}
         {detalle_momento}· {_escapar(ahora.base_calculo).lower()}<br />
         Reporte generado el {generado_en}
@@ -86,51 +97,7 @@ class ExportadorComparativoHTML(ExportadorComparativo):
     </div>
   </header>
 
-  <section class="kpis">
-    {self._kpis(comparativo)}
-  </section>
-
-  <section class="seccion">
-    <h2>Qué se movió</h2>
-    {self._destacados(comparativo)}
-  </section>
-
-  <section class="seccion">
-    <h2>Promedio por cultura: antes y ahora</h2>
-    <p class="ayuda">Escala 0 (bajo) a 2 (alto). Cada cultura muestra sus dos mediciones.</p>
-    {self._grafico_pares(comparativo)}
-  </section>
-
-  <section class="seccion">
-    <h2>Variación por cultura</h2>
-    <p class="ayuda">Cuánto subió o bajó cada cultura. Verde = avanzó, rojo = retrocedió.</p>
-    {self._grafico_variacion(comparativo)}
-  </section>
-
-  <section class="seccion">
-    <h2>Cómo cambió el reparto de valoraciones</h2>
-    <p class="ayuda">La distribución global de símbolos en cada medición.</p>
-    <div class="tartas-par">
-      <figure>
-        <figcaption>Antes · v{antes.sesion.numero_version} ({antes.sesion.fecha_taller.isoformat()})</figcaption>
-        {self._tarta(antes)}
-      </figure>
-      <figure>
-        <figcaption>Ahora · v{ahora.sesion.numero_version} ({ahora.sesion.fecha_taller.isoformat()})</figcaption>
-        {self._tarta(ahora)}
-      </figure>
-    </div>
-  </section>
-
-  <section class="seccion">
-    <h2>Tabla comparativa</h2>
-    {self._tabla(comparativo)}
-  </section>
-
-  <section class="seccion">
-    <h2>Cómo leer este comparativo</h2>
-    {self._notas(comparativo)}
-  </section>
+  {_pestanas(paneles)}
 
   <footer class="pie">Generado automáticamente por el ETL del taller de cultura organizacional.</footer>
 </div>
@@ -139,7 +106,157 @@ class ExportadorComparativoHTML(ExportadorComparativo):
 </html>
 """
 
-    # -- piezas --------------------------------------------------------------
+    # -- paneles --------------------------------------------------------------
+
+    def _panel_resumen(self, comparativo: ReporteComparativo) -> str:
+        return f"""
+    <section class="kpis">{self._kpis(comparativo)}</section>
+
+    <div class="bloque">
+      <h3>Qué se movió</h3>
+      {self._destacados(comparativo)}
+    </div>
+
+    <div class="bloque">
+      <h3>Variación por cultura</h3>
+      <p class="ayuda">Cuánto subió o bajó cada cultura. Verde = avanzó, rojo = retrocedió.</p>
+      {self._grafico_variacion(comparativo)}
+    </div>
+
+    <div class="bloque">
+      <h3>Promedio por cultura: antes y ahora</h3>
+      <p class="ayuda">Escala 0 (rojo) a 2 (verde). Cada cultura muestra sus dos mediciones.</p>
+      {self._grafico_pares(comparativo)}
+    </div>
+"""
+
+    def _panel_por_cultura(self, comparativo: ReporteComparativo) -> str:
+        """Las tartas de cada cultura, en pareja: antes y ahora."""
+        antes = _conteos_por_cultura(comparativo.antes)
+        ahora = _conteos_por_cultura(comparativo.ahora)
+
+        tarjetas = []
+        for tipo_cultura in TipoCultura:
+            comp = comparativo.comparacion.para(tipo_cultura)
+            tarjetas.append(
+                self._tarjeta_par(
+                    titulo=tipo_cultura.value,
+                    subtitulo=tipo_cultura.animal,
+                    comparacion=comp,
+                    conteo_antes=antes.get(tipo_cultura, {}),
+                    conteo_ahora=ahora.get(tipo_cultura, {}),
+                    etiquetas=(
+                        f"v{comparativo.antes.sesion.numero_version}",
+                        f"v{comparativo.ahora.sesion.numero_version}",
+                    ),
+                )
+            )
+        return (
+            '<p class="ayuda">Cada cultura con su reparto del semáforo en las dos mediciones. '
+            "El cambio de proporciones muestra hacia dónde se movió.</p>"
+            f'<div class="rejilla-pares">{"".join(tarjetas)}</div>'
+        )
+
+    def _panel_por_categoria(self, comparativo: ReporteComparativo) -> str:
+        """Lo mismo, abierto por categoría del taller."""
+        antes = _conteos_por_categoria(comparativo.antes)
+        ahora = _conteos_por_categoria(comparativo.ahora)
+        por_clave = {(c.categoria, c.tipo_cultura): c for c in comparativo.comparacion_categoria}
+
+        categorias = [c for c in CategoriaAspecto if any(k[0] is c for k in por_clave)]
+        if not categorias:
+            return '<p class="aviso">Todavía no hay valoraciones para desglosar.</p>'
+
+        bloques = []
+        for categoria in categorias:
+            tarjetas = []
+            for tipo_cultura in TipoCultura:
+                clave = (categoria, tipo_cultura)
+                if clave not in por_clave:
+                    continue
+                tarjetas.append(
+                    self._tarjeta_par(
+                        titulo=tipo_cultura.value,
+                        subtitulo=None,
+                        comparacion=por_clave[clave],
+                        conteo_antes=antes.get(clave, {}),
+                        conteo_ahora=ahora.get(clave, {}),
+                        etiquetas=(
+                            f"v{comparativo.antes.sesion.numero_version}",
+                            f"v{comparativo.ahora.sesion.numero_version}",
+                        ),
+                        compacta=True,
+                    )
+                )
+            if tarjetas:
+                bloques.append(
+                    f'<div class="bloque"><h3>{_escapar(categoria.value)}</h3>'
+                    f'<div class="rejilla-pares">{"".join(tarjetas)}</div></div>'
+                )
+        return (
+            '<p class="ayuda">El mismo contraste abierto por categoría, para ver en cuál de '
+            "ellas se produjo el cambio.</p>" + "".join(bloques)
+        )
+
+    def _panel_datos(self, comparativo: ReporteComparativo) -> str:
+        return f"""
+    <div class="bloque">
+      <h3>Comparativo por tipo de cultura</h3>
+      {self._tabla(comparativo)}
+    </div>
+
+    <div class="bloque">
+      <h3>Comparativo por categoría</h3>
+      {self._tabla_categorias(comparativo)}
+    </div>
+"""
+
+    def _panel_metodo(self, comparativo: ReporteComparativo) -> str:
+        return self._notas(comparativo)
+
+    # -- piezas ----------------------------------------------------------------
+
+    @staticmethod
+    def _tarjeta_par(
+        *,
+        titulo: str,
+        subtitulo: str | None,
+        comparacion,
+        conteo_antes: dict[Valoracion, int],
+        conteo_ahora: dict[Valoracion, int],
+        etiquetas: tuple[str, str],
+        compacta: bool = False,
+    ) -> str:
+        """Una cultura (o cultura×categoría) con sus dos tartas y su variación."""
+        diametro = 120 if compacta else 140
+        grosor = 28 if compacta else 32
+        clase = " tarjeta-par--compacta" if compacta else ""
+
+        def mitad(etiqueta: str, conteo: dict[Valoracion, int], promedio: float | None) -> str:
+            valor = "s/d" if promedio is None else f"{promedio:.2f}"
+            return (
+                '<div class="mitad">'
+                f'<span class="mitad-titulo">{_escapar(etiqueta)}</span>'
+                f'<span class="mitad-valor">{valor}</span>'
+                + grafico_tarta(
+                    _segmentos_de(conteo),
+                    titulo_accesible=f"{titulo} — {etiqueta}",
+                    diametro=diametro,
+                    grosor=grosor,
+                )
+                + "</div>"
+            )
+
+        return (
+            f'<figure class="tarjeta-par{clase}">'
+            f'<figcaption><span class="tarjeta-titulo">{_escapar(titulo)}</span>'
+            + (f'<span class="tarjeta-animal">{_escapar(subtitulo)}</span>' if subtitulo else "")
+            + f"{_insignia_variacion(comparacion)}</figcaption>"
+            '<div class="par-tartas">'
+            + mitad(etiquetas[0], conteo_antes, comparacion.promedio_antes)
+            + mitad(etiquetas[1], conteo_ahora, comparacion.promedio_ahora)
+            + "</div></figure>"
+        )
 
     @staticmethod
     def _kpis(comparativo: ReporteComparativo) -> str:
@@ -168,8 +285,8 @@ class ExportadorComparativoHTML(ExportadorComparativo):
         comparacion = comparativo.comparacion
         if not comparacion.comparables:
             return (
-                '<p class="aviso">Las dos sesiones no tienen ninguna cultura medida en común '
-                "para el mismo momento, así que no hay nada que comparar todavía.</p>"
+                '<p class="aviso">Las dos sesiones no tienen ninguna cultura medida en común, '
+                "así que no hay nada que comparar todavía.</p>"
             )
 
         tarjetas = []
@@ -301,44 +418,45 @@ class ExportadorComparativoHTML(ExportadorComparativo):
         )
 
     @staticmethod
-    def _tarta(reporte) -> str:
-        totales = {v: 0 for v in (Valoracion.BAJO, Valoracion.MEDIO, Valoracion.ALTO)}
-        for r in reporte.resumen.resumenes:
-            for valoracion, cantidad in r.conteo_por_valoracion.items():
-                totales[valoracion] += cantidad
-        return grafico_tarta(
-            [
-                ("Bajo (R)", totales[Valoracion.BAJO], COLOR_BAJO),
-                ("Medio (A)", totales[Valoracion.MEDIO], COLOR_MEDIO),
-                ("Alto (V)", totales[Valoracion.ALTO], COLOR_ALTO),
-            ],
-            titulo_accesible=f"Distribución de valoraciones de {reporte.sesion.etiqueta}",
-            diametro=170,
-            grosor=38,
-        )
-
-    @staticmethod
     def _tabla(comparativo: ReporteComparativo) -> str:
-        filas = []
-        for comp in comparativo.comparacion.comparaciones:
-            antes = "s/d" if comp.promedio_antes is None else f"{comp.promedio_antes:.2f}"
-            ahora = "s/d" if comp.promedio_ahora is None else f"{comp.promedio_ahora:.2f}"
-            variacion = "—" if comp.variacion is None else f"{comp.variacion:+.2f}"
-            porcentual = (
-                "—" if comp.variacion_porcentual is None else f"{comp.variacion_porcentual:+.1f}%"
-            )
-            filas.append(
-                "<tr>"
-                f"<td>{_escapar(comp.tipo_cultura.value)}</td>"
-                f"<td>{antes}</td><td>{ahora}</td><td>{variacion}</td><td>{porcentual}</td>"
-                f"<td>{_etiqueta_tendencia(comp)}</td>"
-                "</tr>"
-            )
+        filas = "".join(
+            "<tr>"
+            f"<td>{_escapar(c.tipo_cultura.value)}</td>"
+            f"<td>{_texto_promedio(c.promedio_antes)}</td>"
+            f"<td>{_texto_promedio(c.promedio_ahora)}</td>"
+            f"<td>{'—' if c.variacion is None else f'{c.variacion:+.2f}'}</td>"
+            f"<td>{'—' if c.variacion_porcentual is None else f'{c.variacion_porcentual:+.1f}%'}</td>"
+            f"<td>{_etiqueta_tendencia(c)}</td>"
+            "</tr>"
+            for c in comparativo.comparacion.comparaciones
+        )
         return (
             '<div class="tabla-envoltorio"><table class="tabla">'
             "<thead><tr><th>Tipo de cultura</th><th>Antes</th><th>Ahora</th>"
             "<th>Variación</th><th>Variación %</th><th>Tendencia</th></tr></thead>"
-            f"<tbody>{''.join(filas)}</tbody></table></div>"
+            f"<tbody>{filas}</tbody></table></div>"
+        )
+
+    @staticmethod
+    def _tabla_categorias(comparativo: ReporteComparativo) -> str:
+        if not comparativo.comparacion_categoria:
+            return '<p class="ayuda">No hay desglose por categoría todavía.</p>'
+        filas = "".join(
+            "<tr>"
+            f"<td>{_escapar(c.categoria.value)}</td>"
+            f"<td>{_escapar(c.tipo_cultura.value)}</td>"
+            f"<td>{_texto_promedio(c.promedio_antes)}</td>"
+            f"<td>{_texto_promedio(c.promedio_ahora)}</td>"
+            f"<td>{'—' if c.variacion is None else f'{c.variacion:+.2f}'}</td>"
+            f"<td>{_etiqueta_tendencia(c)}</td>"
+            "</tr>"
+            for c in comparativo.comparacion_categoria
+        )
+        return (
+            '<div class="tabla-envoltorio"><table class="tabla">'
+            "<thead><tr><th>Categoría</th><th>Tipo de cultura</th><th>Antes</th>"
+            "<th>Ahora</th><th>Variación</th><th>Tendencia</th></tr></thead>"
+            f"<tbody>{filas}</tbody></table></div>"
         )
 
     @staticmethod
@@ -359,6 +477,8 @@ class ExportadorComparativoHTML(ExportadorComparativo):
             )
         notas = [
             que_se_compara,
+            "<strong>Colores:</strong> el semáforo del taller — rojo (R), amarillo (A) y "
+            "verde (V)—, los mismos que usan las hojas FINAL y CULTURAS del libro original.",
             f"<strong>Cobertura de cada medición:</strong> antes "
             f"{antes.diagnostico.aspectos_calificados}/{antes.diagnostico.total_aspectos} ítems "
             f"({antes.diagnostico.porcentaje_cobertura:.0f}%), ahora "
@@ -378,13 +498,50 @@ class ExportadorComparativoHTML(ExportadorComparativo):
         return "<ul class='notas'>" + "".join(f"<li>{n}</li>" for n in notas) + "</ul>"
 
 
+# -- utilidades ------------------------------------------------------------------
+
+
+def _conteos_por_cultura(reporte: ReporteTaller) -> dict[TipoCultura, dict[Valoracion, int]]:
+    totales: dict[TipoCultura, dict[Valoracion, int]] = {}
+    for r in reporte.resumen.resumenes:
+        acumulado = totales.setdefault(r.tipo_cultura, {})
+        for valoracion, cantidad in r.conteo_por_valoracion.items():
+            acumulado[valoracion] = acumulado.get(valoracion, 0) + cantidad
+    return totales
+
+
+def _conteos_por_categoria(
+    reporte: ReporteTaller,
+) -> dict[tuple[CategoriaAspecto, TipoCultura], dict[Valoracion, int]]:
+    totales: dict[tuple[CategoriaAspecto, TipoCultura], dict[Valoracion, int]] = {}
+    for r in reporte.detalle_categoria:
+        acumulado = totales.setdefault((r.categoria, r.tipo_cultura), {})
+        for valoracion, cantidad in r.conteo_por_valoracion.items():
+            acumulado[valoracion] = acumulado.get(valoracion, 0) + cantidad
+    return totales
+
+
+def _texto_promedio(valor: float | None) -> str:
+    return "s/d" if valor is None else f"{valor:.2f}"
+
+
 def _texto_variacion(comp: ComparacionCultura) -> str:
     if comp.variacion_porcentual is None:
         return f"{comp.variacion:+.2f}"
     return f"{comp.variacion:+.2f} ({comp.variacion_porcentual:+.1f}%)"
 
 
-def _etiqueta_tendencia(comp: ComparacionCultura) -> str:
+def _insignia_variacion(comp: ComparacionCultura | ComparacionCategoria) -> str:
+    if not comp.es_comparable:
+        return '<span class="insignia">sin comparar</span>'
+    if comp.mejoro:
+        return f'<span class="insignia" style="color:{COLOR_BUENO}">▲ {comp.variacion:+.2f}</span>'
+    if comp.empeoro:
+        return f'<span class="insignia" style="color:{COLOR_CRITICO}">▼ {comp.variacion:+.2f}</span>'
+    return '<span class="insignia">= sin cambio</span>'
+
+
+def _etiqueta_tendencia(comp: ComparacionCultura | ComparacionCategoria) -> str:
     if not comp.es_comparable:
         return '<span class="tendencia">sin comparar</span>'
     if comp.mejoro:
@@ -408,10 +565,28 @@ def _tarjeta(icono: str, color: str | None, etiqueta: str, cultura: str, valor: 
 
 
 _CSS_EXTRA = """
-.tartas-par { display: flex; flex-wrap: wrap; gap: 32px; margin-top: 8px; }
-.tartas-par figure { margin: 0; flex: 1 1 320px; }
-.tartas-par figcaption {
-  font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 8px; font-weight: 600;
+.rejilla-pares {
+  display: grid; gap: 16px; margin-top: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
 }
+.tarjeta-par {
+  margin: 0; padding: 14px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface-1);
+}
+.tarjeta-par figcaption {
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; margin-bottom: 10px;
+}
+.insignia {
+  margin-left: auto; font-weight: 600; font-size: 0.85rem; white-space: nowrap;
+  font-variant-numeric: tabular-nums; color: var(--text-secondary);
+}
+.par-tartas { display: flex; gap: 14px; flex-wrap: wrap; }
+.mitad { flex: 1 1 150px; display: flex; flex-direction: column; gap: 2px; }
+.mitad-titulo { color: var(--text-secondary); font-size: 0.78rem; font-weight: 600; }
+.mitad-valor { font-size: 1.05rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.mitad .tarta-bloque { flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 4px; }
+.mitad .tarta-leyenda { flex: 1 1 auto; width: 100%; }
+.mitad .tarta-leyenda li { padding: 3px 0; font-size: 0.76rem; }
+.tarjeta-par--compacta .mitad-valor { font-size: 0.95rem; }
 .tendencia { font-weight: 600; white-space: nowrap; }
 """
