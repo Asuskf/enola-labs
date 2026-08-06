@@ -16,7 +16,8 @@ Contexto de negocio (extraído del Excel original):
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from datetime import date
 from enum import Enum
 
 from .exceptions import (
@@ -120,6 +121,33 @@ class Empresa:
 
     id: int | None
     nombre: str
+
+
+@dataclass(frozen=True, slots=True)
+class SesionTaller:
+    """Una aplicación concreta del taller: una empresa, en una fecha dada.
+
+    Una misma empresa puede repetir el taller más adelante para medir cómo
+    evolucionó su cultura. Cada repetición es una sesión nueva con su
+    propio `numero_version` (1 la primera, 2 la siguiente, …), y comparar
+    dos sesiones de la misma empresa es lo que produce el reporte de
+    "antes y ahora".
+    """
+
+    id: int | None
+    empresa: str
+    fecha_taller: date
+    numero_version: int = 1
+    archivo_origen: str = ""
+
+    @property
+    def etiqueta(self) -> str:
+        """Texto corto para identificarla en listas y encabezados."""
+        return f"v{self.numero_version} · {self.fecha_taller.isoformat()}"
+
+    @property
+    def titulo(self) -> str:
+        return f"{self.empresa} — {self.etiqueta}"
 
 
 @dataclass(frozen=True, slots=True)

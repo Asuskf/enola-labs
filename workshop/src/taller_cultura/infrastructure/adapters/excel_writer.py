@@ -22,24 +22,31 @@ class ExportadorReporteExcel(ExportadorReporte):
     """Genera un reporte `.xlsx` con el resumen del taller."""
 
     def exportar_reporte(self, reporte: ReporteTaller, ruta_destino: str) -> None:
-        df_resumen = self._construir_dataframe_resumen(reporte.resumen)
-        df_brechas = self._construir_dataframe_brechas(reporte.resumen)
-        df_detalle = self._construir_dataframe_detalle(reporte)
-        df_ficha = self._construir_dataframe_ficha(reporte)
-
         ruta = Path(ruta_destino)
         ruta.parent.mkdir(parents=True, exist_ok=True)
         with pd.ExcelWriter(ruta, engine="openpyxl") as writer:
-            df_ficha.to_excel(writer, sheet_name="Ficha", index=False)
-            df_resumen.to_excel(writer, sheet_name="Resumen", index=False)
-            df_brechas.to_excel(writer, sheet_name="Brechas", index=False)
-            df_detalle.to_excel(writer, sheet_name="Detalle por categoria", index=False)
+            self._construir_dataframe_ficha(reporte).to_excel(
+                writer, sheet_name="Ficha", index=False
+            )
+            self._construir_dataframe_resumen(reporte.resumen).to_excel(
+                writer, sheet_name="Resumen", index=False
+            )
+            # La hoja de brechas solo existe si hay dos momentos que restar.
+            if reporte.resumen.distingue_momentos:
+                self._construir_dataframe_brechas(reporte.resumen).to_excel(
+                    writer, sheet_name="Brechas", index=False
+                )
+            self._construir_dataframe_detalle(reporte).to_excel(
+                writer, sheet_name="Detalle por categoria", index=False
+            )
 
     @staticmethod
     def _construir_dataframe_ficha(reporte: ReporteTaller) -> pd.DataFrame:
         d = reporte.diagnostico
         filas = [
-            ("Taller", reporte.titulo),
+            ("Empresa", reporte.sesion.empresa),
+            ("Fecha del taller", reporte.sesion.fecha_taller.isoformat()),
+            ("Versión", reporte.sesion.numero_version),
             ("Base de cálculo", reporte.base_calculo),
             ("Ítems del taller", d.total_aspectos),
             ("Ítems calificados", d.aspectos_calificados),
@@ -53,12 +60,15 @@ class ExportadorReporteExcel(ExportadorReporte):
 
     @staticmethod
     def _construir_dataframe_resumen(resumen: ResumenTaller) -> pd.DataFrame:
+        # Con una sola medición la columna «Momento» sobra: todas las filas
+        # dirían lo mismo y nombrarla confunde.
+        distingue = resumen.distingue_momentos
         filas = []
         for r in resumen.resumenes:
             filas.append(
                 {
                     "Tipo de cultura": r.tipo_cultura.value,
-                    "Momento": r.momento.value,
+                    **({"Momento": r.momento.value} if distingue else {}),
                     "Total respuestas": r.total,
                     "Bajo (R)": r.conteo_por_valoracion.get(Valoracion.BAJO, 0),
                     "Medio (A)": r.conteo_por_valoracion.get(Valoracion.MEDIO, 0),
@@ -87,13 +97,14 @@ class ExportadorReporteExcel(ExportadorReporte):
 
     @staticmethod
     def _construir_dataframe_detalle(reporte: ReporteTaller) -> pd.DataFrame:
+        distingue = reporte.resumen.distingue_momentos
         filas = []
         for r in reporte.detalle_categoria:
             filas.append(
                 {
                     "Tipo de cultura": r.tipo_cultura.value,
                     "Categoria": r.categoria.value,
-                    "Momento": r.momento.value,
+                    **({"Momento": r.momento.value} if distingue else {}),
                     "Total respuestas": r.total,
                     "Bajo (R)": r.conteo_por_valoracion.get(Valoracion.BAJO, 0),
                     "Medio (A)": r.conteo_por_valoracion.get(Valoracion.MEDIO, 0),

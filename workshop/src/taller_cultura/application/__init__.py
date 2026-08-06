@@ -2,24 +2,40 @@
 
 No contiene lógica de negocio (eso vive en `taller_cultura.domain`) ni
 detalles técnicos (eso vive en `taller_cultura.infrastructure`). Solo
-coordina: llama al lector, guarda con el repositorio, pide al dominio que
-calcule, entrega al exportador.
+coordina: valida el archivo, llama al lector, guarda con el repositorio,
+pide al dominio que calcule, entrega al exportador.
 """
 
 from .use_cases import (
+    ArchivoNoProcesable,
     CalcularReporteTaller,
-    CalcularResumenTaller,
+    CompararSesiones,
     ExportarPlantillaTaller,
+    ExportarReporteComparativo,
     ExportarReporteTaller,
-    ImportarTallerDesdeExcel,
+    ImportarSesionTaller,
+    ListarSesiones,
+    ReporteComparativo,
     ReporteTaller,
+    SesionNoEncontrada,
+    ValidarArchivoTaller,
 )
+from .validacion import Hallazgo, ResultadoValidacion, Severidad
 
 __all__ = [
+    "ArchivoNoProcesable",
     "CalcularReporteTaller",
-    "CalcularResumenTaller",
+    "CompararSesiones",
     "ExportarPlantillaTaller",
+    "ExportarReporteComparativo",
     "ExportarReporteTaller",
-    "ImportarTallerDesdeExcel",
+    "Hallazgo",
+    "ImportarSesionTaller",
+    "ListarSesiones",
+    "ReporteComparativo",
     "ReporteTaller",
+    "ResultadoValidacion",
+    "SesionNoEncontrada",
+    "Severidad",
+    "ValidarArchivoTaller",
 ]

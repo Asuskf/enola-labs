@@ -10,6 +10,7 @@ from pathlib import Path
 import openpyxl
 import pytest
 
+from taller_cultura.infrastructure.adapters.excel_reader import LectorTallerExcel
 from taller_cultura.infrastructure.adapters.plantilla_writer import (
     HOJAS_QUE_SE_ENVIAN,
     VALORES_DE_ERROR,
@@ -46,6 +47,30 @@ def test_no_deja_formulas_ni_errores(plantilla):
             if isinstance(celda.value, str):
                 assert not celda.value.startswith("="), f"{celda.coordinate} quedó como fórmula"
                 assert not celda.value.startswith("#"), f"{celda.coordinate} quedó con error"
+
+
+def test_la_plantilla_conserva_todas_las_respuestas(plantilla):
+    """Re-leer la plantilla exportada debe dar exactamente lo mismo que el
+    original.
+
+    Un bug real: al limpiar las fórmulas rotas (`#ERROR!`) de la columna B,
+    esos huecos cortaban la racha de filas de respuesta y se perdían las
+    filas CONSENSO que venían después. El original se leía bien y la
+    plantilla no, así que solo comparándolas se detecta.
+    """
+    original = LectorTallerExcel(RUTA_EXCEL)
+    copia = LectorTallerExcel(plantilla)
+
+    aspectos_original = original.leer_aspectos()
+    aspectos_copia = copia.leer_aspectos()
+    calificaciones_original = original.leer_calificaciones(aspectos_original)
+    calificaciones_copia = copia.leer_calificaciones(aspectos_copia)
+
+    assert len(aspectos_copia) == len(aspectos_original)
+    assert len(calificaciones_copia) == len(calificaciones_original)
+    assert sum(c.es_consenso for c in calificaciones_copia) == sum(
+        c.es_consenso for c in calificaciones_original
+    )
 
 
 def test_conserva_el_contenido_del_taller(plantilla):
